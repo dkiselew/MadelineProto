@@ -447,9 +447,9 @@ trait Files
         }
         $downloaded_size = 0;
         if ($end === -1 && isset($message_media['size'])) {
-            $end = $message_media['size'];
+            $end = $message_media['size'] - 1;
         }
-        $size = $end - $offset;
+        $size = $end - $offset + 1;
         $part_size = $this->settings['download']['part_size'];
         $percent = 0;
         $datacenter = isset($message_media['InputFileLocation']['dc_id']) ? $message_media['InputFileLocation']['dc_id'] : $this->settings['connection_settings']['default_dc'];
@@ -551,6 +551,7 @@ trait Files
             }
             if ($start_at) {
                 $res['bytes'] = substr($res['bytes'], $start_at);
+                $offset += $start_at;
             }
             if ($end !== -1 && strlen($res['bytes']) + $downloaded_size >= $size) {
                 $res['bytes'] = substr($res['bytes'], 0, $size - $downloaded_size);
