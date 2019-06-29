@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,13 +19,17 @@
 
 namespace danog\MadelineProto\MTProtoTools;
 
-use Amp\Loop;
+use Amp\Artax\Request;
 
 /**
  * Manages peers.
  */
 trait PeerHandler
 {
+    public $caching_simple = [];
+    public $caching_simple_username = [];
+    public $caching_possible_username = [];
+
     public function to_supergroup($id)
     {
         return -($id + pow(10, (int) floor(log($id, 10) + 3)));
@@ -43,51 +47,32 @@ trait PeerHandler
         return ($log - intval($log)) * 1000 < 10;
     }
 
-    public function handle_pending_pwrchat()
-    {
-        if ($this->postpone_pwrchat || empty($this->pending_pwrchat)) {
-            return false;
-        }
-        $this->postpone_pwrchat = true;
-
-        try {
-            $this->logger->logger('Handling pending pwrchat queries...', \danog\MadelineProto\Logger::VERBOSE);
-            foreach ($this->pending_pwrchat as $query => $params) {
-                unset($this->pending_pwrchat[$query]);
-
-                try {
-                    $this->get_pwr_chat($query, ...$params);
-                } catch (\danog\MadelineProto\Exception $e) {
-                    $this->logger->logger($e->getMessage(), \danog\MadelineProto\Logger::WARNING);
-                } catch (\danog\MadelineProto\RPCErrorException $e) {
-                    $this->logger->logger($e->getMessage(), \danog\MadelineProto\Logger::WARNING);
-                }
-            }
-        } finally {
-            $this->postpone_pwrchat = false;
-        }
-    }
-
     public function add_support($support)
     {
         $this->supportUser = $support['user']['id'];
     }
 
-    public function add_users($users)
-    {
-        foreach ($users as $user) {
-            $this->add_user($user);
-        }
-    }
-
     public function add_user($user)
     {
         if (!isset($user['access_hash'])) {
-            $this->logger->logger("No access hash with user {$user['id']}, trying to fetch by ID...");
-            $this->cache_pwr_chat($user['id'], false, true);
-            if (isset($user['username']) && !isset($this->chats[$user['id']])) {
+            /*if (isset($this->chats[$user['id']]['access_hash']) && $this->chats[$user['id']]['access_hash']) {
+            $this->logger->logger("No access hash with user {$user['id']}, using backup");
+            $user['access_hash'] = $this->chats[$user['id']]['access_hash'];
+            } else {
+            $this->logger->logger("No access hash with user {$user['id']}, not trying to fetch it");
+            $user['access_hash'] = 0;
+            }*/
+            if (!isset($this->caching_simple[$user['id']]) && !(isset($user['username']) && isset($this->caching_simple_username[$user['username']]))) {
+                $this->logger->logger("No access hash with user {$user['id']}, trying to fetch by ID...");
+                if (isset($user['username']) && !isset($this->caching_simple_username[$user['username']])) {
+                    $this->caching_possible_username[$user['id']] = $user['username'];
+                }
+                $this->cache_pwr_chat($user['id'], false, true);
+            } elseif (isset($user['username']) && !isset($this->chats[$user['id']]) && !isset($this->caching_simple_username[$user['username']])) {
                 $this->logger->logger("No access hash with user {$user['id']}, trying to fetch by username...");
                 $this->cache_pwr_chat($user['username'], false, true);
+            } else {
+                $this->logger->logger("No access hash with user {$user['id']}, tried and failed to fetch data...");
             }
 
             return;
@@ -107,14 +92,7 @@ trait PeerHandler
         }
     }
 
-    public function add_chats($chats)
-    {
-        foreach ($chats as $chat) {
-            $this->add_chat($chat);
-        }
-    }
-
-    public function add_chat($chat)
+    public function add_chat_async($chat)
     {
         switch ($chat['_']) {
             case 'chat':
@@ -132,11 +110,18 @@ trait PeerHandler
             case 'channelForbidden':
                 $bot_api_id = $this->to_supergroup($chat['id']);
                 if (!isset($chat['access_hash'])) {
-                    $this->logger->logger("Chat $bot_api_id does not have access hash, fetching by ID...");
-                    $this->cache_pwr_chat($bot_api_id, $this->settings['peer']['full_fetch'], true);
-                    if (isset($chat['username']) && !isset($this->chats[$bot_api_id])) {
-                        $this->logger->logger("Chat $bot_api_id does not have access hash, fetching by username...");
-                        $this->cache_pwr_chat($chat['username'], $this->settings['peer']['full_fetch'], true);
+                    if (!isset($this->caching_simple[$bot_api_id]) && !(isset($chat['username']) && isset($this->caching_simple_username[$chat['username']]))) {
+                        $this->logger->logger("No access hash with {$chat['_']} {$bot_api_id}, trying to fetch by ID...");
+                        if (isset($chat['username']) && !isset($this->caching_simple_username[$chat['username']])) {
+                            $this->caching_possible_username[$bot_api_id] = $chat['username'];
+                        }
+
+                        $this->cache_pwr_chat($bot_api_id, false, true);
+                    } elseif (isset($chat['username']) && !isset($this->chats[$bot_api_id]) && !isset($this->caching_simple_username[$chat['username']])) {
+                        $this->logger->logger("No access hash with {$chat['_']} {$bot_api_id}, trying to fetch by username...");
+                        $this->cache_pwr_chat($chat['username'], false, true);
+                    } else {
+                        $this->logger->logger("No access hash with {$chat['_']} {$bot_api_id}, tried and failed to fetch data...");
                     }
 
                     return;
@@ -146,7 +131,7 @@ trait PeerHandler
 
                     $this->chats[$bot_api_id] = $chat;
 
-                    if ($this->settings['peer']['full_fetch'] && (!isset($this->full_chats[$bot_api_id]) || $this->full_chats[$bot_api_id]['full']['participants_count'] !== $this->get_full_info($bot_api_id)['full']['participants_count'])) {
+                    if ($this->settings['peer']['full_fetch'] && (!isset($this->full_chats[$bot_api_id]) || $this->full_chats[$bot_api_id]['full']['participants_count'] !== (yield $this->get_full_info_async($bot_api_id))['full']['participants_count'])) {
                         $this->cache_pwr_chat($bot_api_id, $this->settings['peer']['full_fetch'], true);
                     }
                 }
@@ -159,25 +144,21 @@ trait PeerHandler
 
     public function cache_pwr_chat($id, $full_fetch, $send)
     {
-        if ($this->postpone_pwrchat) {
-            $this->pending_pwrchat[$id] = [$full_fetch, $send];
-        } else {
-            Loop::defer(function () use ($id, $full_fetch, $send) {
-                try {
-                    $this->get_pwr_chat($id, $full_fetch, $send);
-                } catch (\danog\MadelineProto\Exception $e) {
-                    $this->logger->logger($e->getMessage(), \danog\MadelineProto\Logger::WARNING);
-                } catch (\danog\MadelineProto\RPCErrorException $e) {
-                    $this->logger->logger($e->getMessage(), \danog\MadelineProto\Logger::WARNING);
-                }
-            });
-        }
+        $this->callFork((function () use ($id, $full_fetch, $send) {
+            try {
+                yield $this->get_pwr_chat_async($id, $full_fetch, $send);
+            } catch (\danog\MadelineProto\Exception $e) {
+                $this->logger->logger('While caching: '.$e->getMessage(), \danog\MadelineProto\Logger::WARNING);
+            } catch (\danog\MadelineProto\RPCErrorException $e) {
+                $this->logger->logger('While caching: '.$e->getMessage(), \danog\MadelineProto\Logger::WARNING);
+            }
+        })());
     }
 
-    public function peer_isset($id)
+    public function peer_isset_async($id)
     {
         try {
-            return isset($this->chats[$this->get_info($id)['bot_api_id']]);
+            return isset($this->chats[(yield $this->get_info_async($id))['bot_api_id']]);
         } catch (\danog\MadelineProto\Exception $e) {
             return false;
         } catch (\danog\MadelineProto\RPCErrorException $e) {
@@ -192,12 +173,12 @@ trait PeerHandler
         }
     }
 
-    public function entities_peer_isset($entities)
+    public function entities_peer_isset_async($entities)
     {
         try {
             foreach ($entities as $entity) {
                 if ($entity['_'] === 'messageEntityMentionName' || $entity['_'] === 'inputMessageEntityMentionName') {
-                    if (!$this->peer_isset($entity['user_id'])) {
+                    if (!yield $this->peer_isset_async($entity['user_id'])) {
                         return false;
                     }
                 }
@@ -209,13 +190,13 @@ trait PeerHandler
         return true;
     }
 
-    public function fwd_peer_isset($fwd)
+    public function fwd_peer_isset_async($fwd)
     {
         try {
-            if (isset($fwd['user_id']) && !$this->peer_isset($fwd['user_id'])) {
+            if (isset($fwd['user_id']) && !yield $this->peer_isset_async($fwd['user_id'])) {
                 return false;
             }
-            if (isset($fwd['channel_id']) && !$this->peer_isset($this->to_supergroup($fwd['channel_id']))) {
+            if (isset($fwd['channel_id']) && !yield $this->peer_isset_async($this->to_supergroup($fwd['channel_id']))) {
                 return false;
             }
         } catch (\danog\MadelineProto\Exception $e) {
@@ -225,6 +206,16 @@ trait PeerHandler
         return true;
     }
 
+    public function get_folder_id($id)
+    {
+        if (!is_array($id)) {
+            return null;
+        }
+        if (!isset($id['folder_id'])) {
+            return null;
+        }
+        return $id['folder_id'];
+    }
     public function get_id($id)
     {
         if (is_array($id)) {
@@ -240,7 +231,19 @@ trait PeerHandler
                 case 'notifyPeer':
                 case 'dialog':
                 case 'help.proxyDataPromo':
+                case 'updateChatDefaultBannedRights':
+                case 'folderPeer':
+                case 'inputFolderPeer':
                     return $this->get_id($id['peer']);
+
+                case 'inputUserFromMessage':
+                case 'inputPeerUserFromMessage':
+                    return $id['user_id'];
+
+                case 'inputChannelFromMessage':
+                case 'inputPeerChannelFromMessage':
+                    return $this->to_supergroup($id['channel_id']);
+
                 case 'inputUserSelf':
                 case 'inputPeerSelf':
                     return $this->authorization['user']['id'];
@@ -253,11 +256,13 @@ trait PeerHandler
                 case 'peerUser':
                     return $id['user_id'];
                 case 'chat':
+                case 'chatForbidden':
                 case 'chatFull':
                     return -$id['id'];
                 case 'inputPeerChat':
                 case 'peerChat':
                     return -$id['chat_id'];
+                case 'channelForbidden':
                 case 'channel':
                 case 'channelFull':
                     return $this->to_supergroup($id['id']);
@@ -270,6 +275,7 @@ trait PeerHandler
                     if (!isset($id['from_id']) || $id['to_id']['_'] !== 'peerUser' || $id['to_id']['user_id'] !== $this->authorization['user']['id']) {
                         return $this->get_id($id['to_id']);
                     }
+
                     return $id['from_id'];
 
                 case 'updateChannelReadMessagesContents':
@@ -277,11 +283,11 @@ trait PeerHandler
                 case 'updateChannel':
                 case 'updateChannelWebPage':
                 case 'updateChannelMessageViews':
-                case 'updateChannelTooLong':
                 case 'updateReadChannelInbox':
                 case 'updateReadChannelOutbox':
                 case 'updateDeleteChannelMessages':
                 case 'updateChannelPinnedMessage':
+                case 'updateChannelTooLong':
                     return $this->to_supergroup($id['channel_id']);
                 case 'updateChatParticipants':
                     $id = $id['participants'];
@@ -290,6 +296,7 @@ trait PeerHandler
                 case 'updateChatParticipantDelete':
                 case 'updateChatParticipantAdmin':
                 case 'updateChatAdmins':
+                case 'updateChatPinnedMessage':
                     return -$id['chat_id'];
                 case 'updateUserTyping':
                 case 'updateUserStatus':
@@ -305,6 +312,7 @@ trait PeerHandler
                 case 'updateBotCallbackQuery':
                 case 'updateBotPrecheckoutQuery':
                 case 'updateBotShippingQuery':
+                case 'updateUserPinnedMessage':
                     return $id['user_id'];
                 case 'updatePhoneCall':
                     return $id->getOtherID();
@@ -315,11 +323,7 @@ trait PeerHandler
                 case 'updateNewChannelMessage':
                 case 'updateEditMessage':
                 case 'updateEditChannelMessage':
-                case 'updateNewEncryptedMessage':
                     return $this->get_id($id['message']);
-                case 'chatForbidden':
-                case 'channelForbidden':
-                    throw new \danog\MadelineProto\RPCErrorException('CHAT_FORBIDDEN');
                 default:
                     throw new \danog\MadelineProto\Exception('Invalid constructor given '.var_export($id, true));
             }
@@ -341,11 +345,14 @@ trait PeerHandler
             if (is_string($id)) {
                 $id = \danog\MadelineProto\Magic::$bigint ? (float) $id : (int) $id;
             }
+
             return $id;
         }
+
         return false;
     }
-    public function get_info($id, $recursive = true)
+
+    public function get_info_async($id, $recursive = true)
     {
         if (is_array($id)) {
             switch ($id['_']) {
@@ -354,6 +361,8 @@ trait PeerHandler
                 case 'updateEncryptedChatTyping':
                 case 'updateEncryptedMessagesRead':
                     return $this->get_secret_chat($id['chat_id']);
+                case 'updateNewEncryptedMessage':
+                    $id = $id['message'];
                 case 'encryptedMessage':
                 case 'encryptedMessageService':
                     $id = $id['chat_id'];
@@ -364,30 +373,41 @@ trait PeerHandler
                     return $this->secret_chats[$id];
             }
         }
+        $folder_id = $this->get_folder_id($id);
         $try_id = $this->get_id($id);
-        if ($try_id !== false) $id = $try_id;
+        if ($try_id !== false) {
+            $id = $try_id;
+        }
+
+        $tried_simple = false;
 
         if (is_numeric($id)) {
             if (!isset($this->chats[$id])) {
                 try {
+                    $this->caching_simple[$id] = true;
                     if ($id < 0) {
                         if ($this->is_supergroup($id)) {
-                            $this->method_call('channels.getChannels', ['id' => [['access_hash' => 0, 'channel_id' => $this->from_supergroup($id), '_' => 'inputChannel']]], ['datacenter' => $this->datacenter->curdc]);
+                            yield $this->method_call_async_read('channels.getChannels', ['id' => [['access_hash' => 0, 'channel_id' => $this->from_supergroup($id), '_' => 'inputChannel']]], ['datacenter' => $this->datacenter->curdc]);
                         } else {
-                            $this->method_call('messages.getFullChat', ['chat_id' => -$id], ['datacenter' => $this->datacenter->curdc]);
+                            yield $this->method_call_async_read('messages.getFullChat', ['chat_id' => -$id], ['datacenter' => $this->datacenter->curdc]);
                         }
                     } else {
-                        $this->method_call('users.getUsers', ['id' => [['access_hash' => 0, 'user_id' => $id, '_' => 'inputUser']]], ['datacenter' => $this->datacenter->curdc]);
+                        yield $this->method_call_async_read('users.getUsers', ['id' => [['access_hash' => 0, 'user_id' => $id, '_' => 'inputUser']]], ['datacenter' => $this->datacenter->curdc]);
                     }
                 } catch (\danog\MadelineProto\Exception $e) {
                     $this->logger->logger($e->getMessage(), \danog\MadelineProto\Logger::WARNING);
                 } catch (\danog\MadelineProto\RPCErrorException $e) {
                     $this->logger->logger($e->getMessage(), \danog\MadelineProto\Logger::WARNING);
+                } finally {
+                    if (isset($this->caching_simple[$id])) {
+                        unset($this->caching_simple[$id]);
+                    }
+                    $tried_simple = true;
                 }
             }
             if (isset($this->chats[$id])) {
                 try {
-                    return $this->gen_all($this->chats[$id]);
+                    return $this->gen_all($this->chats[$id], $folder_id);
                 } catch (\danog\MadelineProto\Exception $e) {
                     if ($e->getMessage() === 'This peer is not present in the internal peer database') {
                         unset($this->chats[$id]);
@@ -397,12 +417,26 @@ trait PeerHandler
                 }
             }
             if (!isset($this->settings['pwr']['requests']) || $this->settings['pwr']['requests'] === true && $recursive) {
-                $dbres = json_decode(@file_get_contents('https://id.pwrtelegram.xyz/db/getusername?id='.$id, false, stream_context_create(['http' => ['timeout' => 2]])), true);
-                if (isset($dbres['ok']) && $dbres['ok']) {
-                    $this->resolve_username('@'.$dbres['result']);
+                $dbres = [];
 
-                    return $this->get_info($id, false);
+                try {
+                    $dbres = json_decode(yield $this->datacenter->fileGetContents('https://id.pwrtelegram.xyz/db/getusername?id='.$id), true);
+                } catch (\Throwable $e) {
+                    $this->logger->logger($e);
                 }
+                if (isset($dbres['ok']) && $dbres['ok']) {
+                    yield $this->resolve_username_async('@'.$dbres['result']);
+
+                    return yield $this->get_info_async($id, false);
+                }
+            }
+            if ($tried_simple && isset($this->caching_possible_username[$id])) {
+                $this->logger->logger("No access hash with $id, trying to fetch by username...");
+
+                $user = $this->caching_possible_username[$id];
+                unset($this->caching_possible_username[$id]);
+
+                return yield $this->get_info_async($user);
             }
 
             throw new \danog\MadelineProto\Exception('This peer is not present in the internal peer database');
@@ -411,9 +445,9 @@ trait PeerHandler
             if ($matches[1] === '') {
                 $id = $matches[2];
             } else {
-                $invite = $this->method_call('messages.checkChatInvite', ['hash' => $matches[2]], ['datacenter' => $this->datacenter->curdc]);
+                $invite = yield $this->method_call_async_read('messages.checkChatInvite', ['hash' => $matches[2]], ['datacenter' => $this->datacenter->curdc]);
                 if (isset($invite['chat'])) {
-                    return $this->get_info($invite['chat']);
+                    return yield $this->get_info_async($invite['chat']);
                 } else {
                     throw new \danog\MadelineProto\Exception('You have not joined this chat');
                 }
@@ -421,30 +455,30 @@ trait PeerHandler
         }
         $id = strtolower(str_replace('@', '', $id));
         if ($id === 'me') {
-            return $this->get_info($this->authorization['user']['id']);
+            return yield $this->get_info_async($this->authorization['user']['id']);
         }
         if ($id === 'support') {
             if (!$this->supportUser) {
-                $this->method_call('help.getSupport', [], ['datacenter' => $this->settings['connection_settings']['default_dc']]);
+                yield $this->method_call_async_read('help.getSupport', [], ['datacenter' => $this->settings['connection_settings']['default_dc']]);
             }
 
-            return $this->get_info($this->supportUser);
+            return yield $this->get_info_async($this->supportUser);
         }
         foreach ($this->chats as $chat) {
             if (isset($chat['username']) && strtolower($chat['username']) === $id) {
-                return $this->gen_all($chat);
+                return $this->gen_all($chat, $folder_id);
             }
         }
         if ($recursive) {
-            $this->resolve_username($id);
+            yield $this->resolve_username_async($id);
 
-            return $this->get_info($id, false);
+            return yield $this->get_info_async($id, false);
         }
 
         throw new \danog\MadelineProto\Exception('This peer is not present in the internal peer database');
     }
 
-    public function gen_all($constructor)
+    public function gen_all($constructor, $folder_id = null)
     {
         $res = [$this->constructors->find_by_predicate($constructor['_'])['type'] => $constructor];
         switch ($constructor['_']) {
@@ -495,11 +529,14 @@ trait PeerHandler
                 $res['type'] = $constructor['megagroup'] ? 'supergroup' : 'channel';
                 break;
             case 'channelForbidden':
-                throw new \danog\MadelineProto\RPCErrorException('CHAT_FORBIDDEN');
+                throw new \danog\MadelineProto\Exception('This peer is not present in the internal peer database');
             default:
                 throw new \danog\MadelineProto\Exception('Invalid constructor given '.var_export($constructor, true));
         }
-
+        if ($folder_id) {
+            $res['FolderPeer'] = ['_' => 'folderPeer', 'peer' => $res['Peer'], 'folder_id' => $folder_id];
+            $res['InputFolderPeer'] = ['_' => 'inputFolderPeer', 'peer' => $res['InputPeer'], 'folder_id' => $folder_id];
+        }
         return $res;
     }
 
@@ -508,23 +545,23 @@ trait PeerHandler
         return isset($this->full_chats[$id]['last_update']) ? $this->full_chats[$id]['last_update'] : 0;
     }
 
-    public function get_full_info($id)
+    public function get_full_info_async($id)
     {
-        $partial = $this->get_info($id);
+        $partial = yield $this->get_info_async($id);
         if (time() - $this->full_chat_last_updated($partial['bot_api_id']) < (isset($this->settings['peer']['full_info_cache_time']) ? $this->settings['peer']['full_info_cache_time'] : 0)) {
             return array_merge($partial, $this->full_chats[$partial['bot_api_id']]);
         }
         switch ($partial['type']) {
             case 'user':
             case 'bot':
-                $full = $this->method_call('users.getFullUser', ['id' => $partial['InputUser']], ['datacenter' => $this->datacenter->curdc]);
+                $full = yield $this->method_call_async_read('users.getFullUser', ['id' => $partial['InputUser']], ['datacenter' => $this->datacenter->curdc]);
                 break;
             case 'chat':
-                $full = $this->method_call('messages.getFullChat', $partial, ['datacenter' => $this->datacenter->curdc])['full_chat'];
+                $full = (yield $this->method_call_async_read('messages.getFullChat', $partial, ['datacenter' => $this->datacenter->curdc]))['full_chat'];
                 break;
             case 'channel':
             case 'supergroup':
-                $full = $this->method_call('channels.getFullChannel', ['channel' => $partial['InputChannel']], ['datacenter' => $this->datacenter->curdc])['full_chat'];
+                $full = (yield $this->method_call_async_read('channels.getFullChannel', ['channel' => $partial['InputChannel']], ['datacenter' => $this->datacenter->curdc]))['full_chat'];
                 break;
         }
 
@@ -533,14 +570,14 @@ trait PeerHandler
         $res['last_update'] = time();
         $this->full_chats[$partial['bot_api_id']] = $res;
 
-        $partial = $this->get_info($id);
+        $partial = yield $this->get_info_async($id);
 
         return array_merge($partial, $res);
     }
 
-    public function get_pwr_chat($id, $fullfetch = true, $send = true)
+    public function get_pwr_chat_async($id, $fullfetch = true, $send = true)
     {
-        $full = $fullfetch ? $this->get_full_info($id) : $this->get_info($id);
+        $full = $fullfetch ? yield $this->get_full_info_async($id) : yield $this->get_info_async($id);
         $res = ['id' => $full['bot_api_id'], 'type' => $full['type']];
         switch ($full['type']) {
             case 'user':
@@ -556,19 +593,8 @@ trait PeerHandler
                     }
                 }
                 if (isset($full['full']['profile_photo']['sizes'])) {
-                    $res['photo'] = $this->photosize_to_botapi(end($full['full']['profile_photo']['sizes']), $full['full']['profile_photo']);
+                    $res['photo'] = yield $this->photosize_to_botapi_async(end($full['full']['profile_photo']['sizes']), $full['full']['profile_photo']);
                 }
-                /*$bio = '';
-                if ($full['type'] === 'user' && isset($res['username']) && !isset($res['about']) && $fullfetch) {
-                if (preg_match('/meta property="og:description" content=".+/', file_get_contents('https://telegram.me/'.$res['username']), $biores)) {
-                $bio = html_entity_decode(preg_replace_callback('/(&#[0-9]+;)/', function ($m) {
-                return mb_convert_encoding($m[1], 'UTF-8', 'HTML-ENTITIES');
-                }, str_replace(['meta property="og:description" content="', '">'], '', $biores[0])));
-                }
-                if ($bio != '' && $bio != 'You can contact @'.$res['username'].' right away.') {
-                $res['about'] = $bio;
-                }
-                }*/
                 break;
             case 'chat':
                 foreach (['title', 'participants_count', 'admin', 'admins_enabled'] as $key) {
@@ -585,7 +611,7 @@ trait PeerHandler
                     $res['all_members_are_administrators'] = !$res['admins_enabled'];
                 }
                 if (isset($full['full']['chat_photo']['sizes'])) {
-                    $res['photo'] = $this->photosize_to_botapi(end($full['full']['chat_photo']['sizes']), $full['full']['chat_photo']);
+                    $res['photo'] = yield $this->photosize_to_botapi_async(end($full['full']['chat_photo']['sizes']), $full['full']['chat_photo']);
                 }
                 if (isset($full['full']['exported_invite']['link'])) {
                     $res['invite'] = $full['full']['exported_invite']['link'];
@@ -607,7 +633,7 @@ trait PeerHandler
                     }
                 }
                 if (isset($full['full']['chat_photo']['sizes'])) {
-                    $res['photo'] = $this->photosize_to_botapi(end($full['full']['chat_photo']['sizes']), $full['full']['chat_photo']);
+                    $res['photo'] = yield $this->photosize_to_botapi_async(end($full['full']['chat_photo']['sizes']), $full['full']['chat_photo']);
                 }
                 if (isset($full['full']['exported_invite']['link'])) {
                     $res['invite'] = $full['full']['exported_invite']['link'];
@@ -620,15 +646,15 @@ trait PeerHandler
         if (isset($res['participants']) && $fullfetch) {
             foreach ($res['participants'] as $key => $participant) {
                 $newres = [];
-                $newres['user'] = $this->get_pwr_chat($participant['user_id'], false, true);
+                $newres['user'] = yield $this->get_pwr_chat_async($participant['user_id'], false, true);
                 if (isset($participant['inviter_id'])) {
-                    $newres['inviter'] = $this->get_pwr_chat($participant['inviter_id'], false, true);
+                    $newres['inviter'] = yield $this->get_pwr_chat_async($participant['inviter_id'], false, true);
                 }
                 if (isset($participant['promoted_by'])) {
-                    $newres['promoted_by'] = $this->get_pwr_chat($participant['promoted_by'], false, true);
+                    $newres['promoted_by'] = yield $this->get_pwr_chat_async($participant['promoted_by'], false, true);
                 }
                 if (isset($participant['kicked_by'])) {
-                    $newres['kicked_by'] = $this->get_pwr_chat($participant['kicked_by'], false, true);
+                    $newres['kicked_by'] = yield $this->get_pwr_chat_async($participant['kicked_by'], false, true);
                 }
                 if (isset($participant['date'])) {
                     $newres['date'] = $participant['date'];
@@ -665,13 +691,13 @@ trait PeerHandler
             $limit = 200;
             $filters = ['channelParticipantsAdmins', 'channelParticipantsBots'];
             foreach ($filters as $filter) {
-                $this->fetch_participants($full['InputChannel'], $filter, '', $total_count, $res);
+                yield $this->fetch_participants_async($full['InputChannel'], $filter, '', $total_count, $res);
             }
             $q = '';
 
             $filters = ['channelParticipantsSearch', 'channelParticipantsKicked', 'channelParticipantsBanned'];
             foreach ($filters as $filter) {
-                $this->recurse_alphabet_search_participants($full['InputChannel'], $filter, $q, $total_count, $res);
+                yield $this->recurse_alphabet_search_participants_async($full['InputChannel'], $filter, $q, $total_count, $res);
             }
             $this->logger->logger('Fetched '.count($res['participants'])." out of $total_count");
             $res['participants'] = array_values($res['participants']);
@@ -686,18 +712,18 @@ trait PeerHandler
         return $res;
     }
 
-    public function recurse_alphabet_search_participants($channel, $filter, $q, $total_count, &$res)
+    public function recurse_alphabet_search_participants_async($channel, $filter, $q, $total_count, &$res)
     {
-        if (!$this->fetch_participants($channel, $filter, $q, $total_count, $res)) {
+        if (!yield $this->fetch_participants_async($channel, $filter, $q, $total_count, $res)) {
             return false;
         }
 
         for ($x = 'a'; $x !== 'aa' && $total_count > count($res['participants']); $x++) {
-            $this->recurse_alphabet_search_participants($channel, $filter, $q.$x, $total_count, $res);
+            yield $this->recurse_alphabet_search_participants_async($channel, $filter, $q.$x, $total_count, $res);
         }
     }
 
-    public function fetch_participants($channel, $filter, $q, $total_count, &$res)
+    public function fetch_participants_async($channel, $filter, $q, $total_count, &$res)
     {
         $offset = 0;
         $limit = 200;
@@ -707,9 +733,11 @@ trait PeerHandler
 
         do {
             try {
-                $gres = $this->method_call('channels.getParticipants', ['channel' => $channel, 'filter' => ['_' => $filter, 'q' => $q], 'offset' => $offset, 'limit' => $limit, 'hash' => $hash = $this->get_participants_hash($channel, $filter, $q, $offset, $limit)], ['datacenter' => $this->datacenter->curdc, 'heavy' => true]);
+                $gres = yield $this->method_call_async_read('channels.getParticipants', ['channel' => $channel, 'filter' => ['_' => $filter, 'q' => $q], 'offset' => $offset, 'limit' => $limit, 'hash' => $hash = $this->get_participants_hash($channel, $filter, $q, $offset, $limit)], ['datacenter' => $this->datacenter->curdc, 'heavy' => true]);
             } catch (\danog\MadelineProto\RPCErrorException $e) {
                 if ($e->rpc === 'CHAT_ADMIN_REQUIRED') {
+                    $this->logger->logger($e->rpc);
+
                     return $has_more;
                 } else {
                     throw $e;
@@ -730,15 +758,15 @@ trait PeerHandler
 
             foreach ($gres['participants'] as $participant) {
                 $newres = [];
-                $newres['user'] = $this->get_pwr_chat($participant['user_id'], false, true);
+                $newres['user'] = yield $this->get_pwr_chat_async($participant['user_id'], false, true);
                 if (isset($participant['inviter_id'])) {
-                    $newres['inviter'] = $this->get_pwr_chat($participant['inviter_id'], false, true);
+                    $newres['inviter'] = yield $this->get_pwr_chat_async($participant['inviter_id'], false, true);
                 }
                 if (isset($participant['kicked_by'])) {
-                    $newres['kicked_by'] = $this->get_pwr_chat($participant['kicked_by'], false, true);
+                    $newres['kicked_by'] = yield $this->get_pwr_chat_async($participant['kicked_by'], false, true);
                 }
                 if (isset($participant['promoted_by'])) {
-                    $newres['promoted_by'] = $this->get_pwr_chat($participant['promoted_by'], false, true);
+                    $newres['promoted_by'] = yield $this->get_pwr_chat_async($participant['promoted_by'], false, true);
                 }
                 if (isset($participant['date'])) {
                     $newres['date'] = $participant['date'];
@@ -772,7 +800,9 @@ trait PeerHandler
             $offset += count($gres['participants']);
         } while (count($gres['participants']));
 
-        if ($offset === $limit) return true;
+        if ($offset === $limit) {
+            return true;
+        }
 
         return $has_more;
     }
@@ -804,15 +834,6 @@ trait PeerHandler
     {
         $settings = isset($this->settings['connection_settings'][$this->datacenter->curdc]) ? $this->settings['connection_settings'][$this->datacenter->curdc] : $this->settings['connection_settings']['all'];
         if (!isset($this->settings['pwr']) || $this->settings['pwr']['pwr'] === false || $settings['test_mode']) {
-            /*
-            try {
-            if (isset($res['username'])) {
-            shell_exec('curl '.escapeshellarg('https://api.pwrtelegram.xyz/getchat?chat_id=@'.$res['username']).' -s -o /dev/null >/dev/null 2>/dev/null & ');
-            }
-            } catch (\danog\MadelineProto\Exception $e) {
-            $this->logger->logger([$e->getMessage());
-            }
-             */
             return;
         }
         if (!empty($res)) {
@@ -834,30 +855,24 @@ trait PeerHandler
             //$path = '/tmp/ids'.hash('sha256', $payload);
             //file_put_contents($path, $payload);
             $id = isset($this->authorization['user']['username']) ? $this->authorization['user']['username'] : $this->authorization['user']['id'];
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_URL, 'https://id.pwrtelegram.xyz/db'.$this->settings['pwr']['db_token'].'/addnewmadeline?d=pls&from='.$id);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-            $result = curl_exec($ch);
-            curl_close($ch);
-            //$result = shell_exec('curl '.escapeshellarg('https://id.pwrtelegram.xyz/db'.$this->settings['pwr']['db_token'].'/addnewmadeline?d=pls&from='.$id).' -d '.escapeshellarg('@'.$path).' -s >/dev/null 2>/dev/null & ');
+
+            $request = (new Request('https://id.pwrtelegram.xyz/db'.$this->settings['pwr']['db_token'].'/addnewmadeline?d=pls&from='.$id, 'POST'))->withHeader('content-type', 'application/json')->withBody($payload);
+
+            $result = yield (yield $this->datacenter->getHTTPClient()->request($request))->getBody();
+
             $this->logger->logger("============ $result =============", \danog\MadelineProto\Logger::VERBOSE);
             $this->qres = [];
             $this->last_stored = time() + 10;
         } catch (\danog\MadelineProto\Exception $e) {
-            if (file_exists($path)) {
-                unlink($path);
-            }
             $this->logger->logger('======= COULD NOT STORE IN DB DUE TO '.$e->getMessage().' =============', \danog\MadelineProto\Logger::VERBOSE);
         }
     }
 
-    public function resolve_username($username)
+    public function resolve_username_async($username)
     {
         try {
-            $res = $this->method_call('contacts.resolveUsername', ['username' => str_replace('@', '', $username)], ['datacenter' => $this->datacenter->curdc]);
+            $this->caching_simple_username[$username] = true;
+            $res = yield $this->method_call_async_read('contacts.resolveUsername', ['username' => str_replace('@', '', $username)], ['datacenter' => $this->datacenter->curdc]);
         } catch (\danog\MadelineProto\RPCErrorException $e) {
             $this->logger->logger('Username resolution failed with error '.$e->getMessage(), \danog\MadelineProto\Logger::ERROR);
             if (strpos($e->rpc, 'FLOOD_WAIT_') === 0 || $e->rpc === 'AUTH_KEY_UNREGISTERED' || $e->rpc === 'USERNAME_INVALID') {
@@ -865,6 +880,10 @@ trait PeerHandler
             }
 
             return false;
+        } finally {
+            if (isset($this->caching_simple_username[$username])) {
+                unset($this->caching_simple_username[$username]);
+            }
         }
         if ($res['_'] === 'contacts.resolvedPeer') {
             return $res;

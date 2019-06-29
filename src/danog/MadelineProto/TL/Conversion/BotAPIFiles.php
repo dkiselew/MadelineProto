@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -70,15 +70,24 @@ trait BotAPIFiles
         return $new;
     }
 
-    public function photosize_to_botapi($photoSize, $photo, $thumbnail = false)
+    public function photosize_to_botapi_async($photoSize, $photo, $thumbnail = false)
     {
-        $ext = $this->get_extension_from_location(['_' => 'inputFileLocation', 'volume_id' => $photoSize['location']['volume_id'], 'local_id' => $photoSize['location']['local_id'], 'secret' => $photoSize['location']['secret'], 'dc_id' => $photoSize['location']['dc_id']], '.jpg');
-        $photoSize['location']['access_hash'] = isset($photo['access_hash']) ? $photo['access_hash'] : 0;
-        $photoSize['location']['id'] = isset($photo['id']) ? $photo['id'] : 0;
+        $ext = '.jpg';//$this->get_extension_from_location(['_' => 'inputFileLocation', 'volume_id' => $photoSize['location']['volume_id'], 'local_id' => $photoSize['location']['local_id'], 'secret' => $photoSize['location']['secret'], 'dc_id' => $photoSize['location']['dc_id']], '.jpg');
+        $photoSize['location']['access_hash'] = $photo['access_hash'] ?? 0;
+        $photoSize['location']['id'] = $photo['id'] ?? 0;
+        $photoSize['location']['secret'] = $photo['location']['secret'] ?? 0;
+        $photoSize['location']['dc_id'] = $photo['dc_id'];
         $photoSize['location']['_'] = $thumbnail ? 'bot_thumbnail' : 'bot_photo';
-        $data = $this->serialize_object(['type' => 'File'], $photoSize['location'], 'File').chr(2);
+        $data = (yield $this->serialize_object_async(['type' => 'File'], $photoSize['location'], 'File')).chr(2);
 
-        return ['file_id' => $this->base64url_encode($this->rle_encode($data)), 'width' => $photoSize['w'], 'height' => $photoSize['h'], 'file_size' => isset($photoSize['size']) ? $photoSize['size'] : strlen($photoSize['bytes']), 'mime_type' => 'image/jpeg', 'file_name' => $photoSize['location']['volume_id'].'_'.$photoSize['location']['local_id'].$ext];
+        return [
+            'file_id' => $this->base64url_encode($this->rle_encode($data)), 
+            'width' => $photoSize['w'], 
+            'height' => $photoSize['h'], 
+            'file_size' => isset($photoSize['size']) ? $photoSize['size'] : strlen($photoSize['bytes']), 
+            'mime_type' => 'image/jpeg', 
+            'file_name' => $photoSize['location']['volume_id'].'_'.$photoSize['location']['local_id'].$ext
+        ];
     }
 
     public function unpack_file_id($file_id)
@@ -92,7 +101,7 @@ trait BotAPIFiles
         switch ($deserialized['_']) {
             case 'bot_thumbnail':
             case 'bot_photo':
-                $constructor = ['_' => 'photo', 'sizes' => []];
+                $constructor = ['_' => 'photo', 'sizes' => [], 'dc_id' => $deserialized['dc_id']];
                 $constructor['id'] = $deserialized['id'];
                 $constructor['access_hash'] = $deserialized['access_hash'];
                 unset($deserialized['id']);

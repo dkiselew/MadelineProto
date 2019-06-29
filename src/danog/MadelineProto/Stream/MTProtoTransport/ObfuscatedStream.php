@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -24,7 +24,6 @@ use danog\MadelineProto\Stream\Async\Buffer;
 use danog\MadelineProto\Stream\Async\BufferedStream;
 use danog\MadelineProto\Stream\BufferedProxyStreamInterface;
 use danog\MadelineProto\Stream\ConnectionContext;
-use danog\MadelineProto\Tools;
 
 /**
  * Obfuscated2 stream wrapper.
@@ -35,7 +34,6 @@ use danog\MadelineProto\Tools;
  */
 class ObfuscatedStream implements BufferedProxyStreamInterface
 {
-    use Tools;
     use Buffer;
     use BufferedStream;
     private $encrypt;
@@ -188,13 +186,26 @@ class ObfuscatedStream implements BufferedProxyStreamInterface
      */
     public function setExtra($extra)
     {
-        if (isset($extra['secret']) && strlen($extra['secret']) > 17) {
-            $extra['secret'] = hex2bin($extra['secret']);
+        if (isset($extra['secret'])) {
+            if (strlen($extra['secret']) > 17) {
+                $extra['secret'] = hex2bin($extra['secret']);
+            }
+            if (strlen($extra['secret']) == 17) {
+                $extra['secret'] = substr($extra['secret'], 1, 16);
+            }
         }
-        if (isset($extra['secret']) && strlen($extra['secret']) == 17) {
-            $extra['secret'] = substr($extra['secret'], 0, 16);
-        }
+
         $this->extra = $extra;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return \Amp\Socket\Socket
+     */
+    public function getSocket(): \Amp\Socket\Socket
+    {
+        return $this->stream->getSocket();
     }
 
     public static function getName(): string

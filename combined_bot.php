@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /*
-Copyright 2016-2018 Daniil Gentili
+Copyright 2016-2019 Daniil Gentili
 (https://daniil.it)
 This file is part of MadelineProto.
 MadelineProto is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -42,7 +42,7 @@ class EventHandler extends \danog\MadelineProto\CombinedEventHandler
         if ($res == '') {
             $res = var_export($update, true);
         }
-        yield $MadelineProto->sleep_async(3);
+        yield $MadelineProto->sleep(3);
 
         try {
             yield $MadelineProto->messages->sendMessage(['peer' => $update, 'message' => "<code>$res</code>\n\nDopo 3 secondi, in modo asincrono", 'reply_to_msg_id' => isset($update['message']['id']) ? $update['message']['id'] : null, 'parse_mode' => 'HTML']); //'entities' => [['_' => 'messageEntityPre', 'offset' => 0, 'length' => strlen($res), 'language' => 'json']]]);

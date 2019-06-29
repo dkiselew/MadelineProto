@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -24,7 +24,7 @@ namespace danog\MadelineProto\SecretChats;
  */
 trait MessageHandler
 {
-    public function encrypt_secret_message($chat_id, $message)
+    public function encrypt_secret_message_async($chat_id, $message)
     {
         if (!isset($this->secret_chats[$chat_id])) {
             $this->logger->logger(sprintf(\danog\MadelineProto\Lang::$current_lang['secret_chat_skipping'], $chat_id));
@@ -35,13 +35,13 @@ trait MessageHandler
         $this->secret_chats[$chat_id]['ttr']--;
         if ($this->secret_chats[$chat_id]['layer'] > 8) {
             if (($this->secret_chats[$chat_id]['ttr'] <= 0 || time() - $this->secret_chats[$chat_id]['updated'] > 7 * 24 * 60 * 60) && $this->secret_chats[$chat_id]['rekeying'][0] === 0) {
-                $this->rekey($chat_id);
+                yield $this->rekey_async($chat_id);
             }
             $message = ['_' => 'decryptedMessageLayer', 'layer' => $this->secret_chats[$chat_id]['layer'], 'in_seq_no' => $this->generate_secret_in_seq_no($chat_id), 'out_seq_no' => $this->generate_secret_out_seq_no($chat_id), 'message' => $message];
             $this->secret_chats[$chat_id]['out_seq_no']++;
         }
         $this->secret_chats[$chat_id]['outgoing'][$this->secret_chats[$chat_id]['out_seq_no']] = $message;
-        $message = $this->serialize_object(['type' => $constructor = $this->secret_chats[$chat_id]['layer'] === 8 ? 'DecryptedMessage' : 'DecryptedMessageLayer'], $message, $constructor, $this->secret_chats[$chat_id]['layer']);
+        $message = yield $this->serialize_object_async(['type' => $constructor = $this->secret_chats[$chat_id]['layer'] === 8 ? 'DecryptedMessage' : 'DecryptedMessageLayer'], $message, $constructor, $this->secret_chats[$chat_id]['layer']);
         $message = $this->pack_unsigned_int(strlen($message)).$message;
         if ($this->secret_chats[$chat_id]['mtproto'] === 2) {
             $padding = $this->posmod(-strlen($message), 16);
@@ -61,7 +61,7 @@ trait MessageHandler
         return $message;
     }
 
-    public function handle_encrypted_update($message, $test = false)
+    public function handle_encrypted_update_async($message, $test = false)
     {
         if (!isset($this->secret_chats[$message['message']['chat_id']])) {
             $this->logger->logger(sprintf(\danog\MadelineProto\Lang::$current_lang['secret_chat_skipping'], $message['message']['chat_id']));
@@ -73,13 +73,13 @@ trait MessageHandler
         if ($auth_key_id !== $this->secret_chats[$message['message']['chat_id']]['key']['fingerprint']) {
             if (isset($this->secret_chats[$message['message']['chat_id']]['old_key']['fingerprint'])) {
                 if ($auth_key_id !== $this->secret_chats[$message['message']['chat_id']]['old_key']['fingerprint']) {
-                    $this->discard_secret_chat($message['message']['chat_id']);
+                    yield $this->discard_secret_chat_async($message['message']['chat_id']);
 
                     throw new \danog\MadelineProto\SecurityException(\danog\MadelineProto\Lang::$current_lang['fingerprint_mismatch']);
                 }
                 $old = true;
             } else {
-                $this->discard_secret_chat($message['message']['chat_id']);
+                yield $this->discard_secret_chat_async($message['message']['chat_id']);
 
                 throw new \danog\MadelineProto\SecurityException(\danog\MadelineProto\Lang::$current_lang['fingerprint_mismatch']);
             }
@@ -114,12 +114,12 @@ trait MessageHandler
         $deserialized = $this->deserialize($message_data, ['type' => '']);
         $this->secret_chats[$message['message']['chat_id']]['ttr']--;
         if (($this->secret_chats[$message['message']['chat_id']]['ttr'] <= 0 || time() - $this->secret_chats[$message['message']['chat_id']]['updated'] > 7 * 24 * 60 * 60) && $this->secret_chats[$message['message']['chat_id']]['rekeying'][0] === 0) {
-            $this->rekey($message['message']['chat_id']);
+            yield $this->rekey_async($message['message']['chat_id']);
         }
         unset($message['message']['bytes']);
         $message['message']['decrypted_message'] = $deserialized;
         $this->secret_chats[$message['message']['chat_id']]['incoming'][$this->secret_chats[$message['message']['chat_id']]['in_seq_no']] = $message['message'];
-        $this->handle_decrypted_update($message);
+        yield $this->handle_decrypted_update_async($message);
     }
 
     public function try_mtproto_v1_decrypt($message_key, $chat_id, $old, $encrypted_data)

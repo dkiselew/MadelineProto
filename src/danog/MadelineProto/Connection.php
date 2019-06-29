@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -18,12 +18,12 @@
 
 namespace danog\MadelineProto;
 
+use Amp\ByteStream\ClosedException;
 use Amp\Deferred;
 use Amp\Promise;
 use danog\MadelineProto\Loop\Connection\CheckLoop;
 use danog\MadelineProto\Loop\Connection\HttpWaitLoop;
 use danog\MadelineProto\Loop\Connection\ReadLoop;
-use danog\MadelineProto\Loop\Connection\UpdateLoop;
 use danog\MadelineProto\Loop\Connection\WriteLoop;
 use danog\MadelineProto\MTProtoTools\Crypt;
 use danog\MadelineProto\Stream\ConnectionContext;
@@ -69,6 +69,8 @@ class Connection
     public $new_outgoing = [];
     public $pending_outgoing = [];
     public $pending_outgoing_key = 0;
+    public $pending_outgoing_unencrypted = [];
+    public $pending_outgoing_unencrypted_key = 0;
     public $max_incoming_id;
     public $max_outgoing_id;
     public $authorized = false;
@@ -103,23 +105,7 @@ class Connection
      *
      * @return \Amp\Promise
      */
-    public function connect(ConnectionContext $ctx): Promise
-    {
-        return $this->call($this->connectAsync($ctx));
-    }
-
-    /**
-     * Connect function.
-     *
-     * Connects to a telegram DC using the specified protocol, proxy and connection parameters
-     *
-     * @param string $proxy Proxy class name
-     *
-     * @internal
-     *
-     * @return \Amp\Promise
-     */
-    public function connectAsync(ConnectionContext $ctx): \Generator
+    public function connect(ConnectionContext $ctx): \Generator
     {
         $this->API->logger->logger("Trying connection via $ctx", \danog\MadelineProto\Logger::WARNING);
 
@@ -142,14 +128,11 @@ class Connection
         if (!isset($this->waiter)) {
             $this->waiter = new HttpWaitLoop($this->API, $this->datacenter);
         }
-        if (!isset($this->updater)) {
-            $this->updater = new UpdateLoop($this->API, $this->datacenter);
-        }
         foreach ($this->new_outgoing as $message_id) {
             if ($this->outgoing_messages[$message_id]['unencrypted']) {
                 $promise = $this->outgoing_messages[$message_id]['promise'];
                 \Amp\Loop::defer(function () use ($promise) {
-                    $promise->fail(new Exception('Restart'));
+                    $promise->fail(new Exception('Restart because we were reconnected'));
                 });
                 unset($this->new_outgoing[$message_id]);
                 unset($this->outgoing_messages[$message_id]);
@@ -164,18 +147,9 @@ class Connection
             $this->checker->resume();
         }
         $this->waiter->start();
-
-        if ($this->datacenter === $this->API->settings['connection_settings']['default_dc']) {
-            $this->updater->start();
-        }
     }
 
-    public function sendMessage($message, $flush = true): Promise
-    {
-        return $this->call($this->sendMessageGenerator($message, $flush));
-    }
-
-    public function sendMessageGenerator($message, $flush = true): \Generator
+    public function sendMessage($message, $flush = true)
     {
         $deferred = new Deferred();
 
@@ -198,6 +172,7 @@ class Connection
                 $this->API->referenceDatabase->refreshNext(false);
             }
             $message['serialized_body'] = $body;
+            unset($body);
         }
 
         $message['send_promise'] = $deferred;
@@ -207,7 +182,7 @@ class Connection
             $this->writer->resume();
         }
 
-        return yield $deferred->promise();
+        return $deferred->promise();
     }
 
     public function setExtra($extra)
@@ -217,6 +192,7 @@ class Connection
 
     public function disconnect()
     {
+        $this->API->logger->logger("Disconnecting from DC {$this->datacenter}");
         $this->old = true;
         foreach (['reader', 'writer', 'checker', 'waiter', 'updater'] as $loop) {
             if (isset($this->{$loop}) && $this->{$loop}) {
@@ -224,20 +200,23 @@ class Connection
             }
         }
         if ($this->stream) {
-            $this->stream->disconnect();
+            try {
+                $this->stream->disconnect();
+            } catch (ClosedException $e) {
+                $this->API->logger->logger($e);
+            }
         }
+        $this->API->logger->logger("Disconnected from DC {$this->datacenter}");
     }
 
-    public function reconnect(): Promise
+    public function reconnect(): \Generator
     {
-        return $this->call($this->reconnectAsync());
-    }
-
-    public function reconnectAsync(): \Generator
-    {
-        $this->API->logger->logger('Reconnecting');
+        $this->API->logger->logger("Reconnecting DC {$this->datacenter}");
         $this->disconnect();
-        yield $this->API->datacenter->dc_connect_async($this->ctx->getDc());
+        yield $this->API->datacenter->dcConnectAsync($this->ctx->getDc());
+        if ($this->API->hasAllAuth() && !$this->hasPendingCalls()) {
+            $this->callFork($this->API->method_call_async_read('ping', ['ping_id' => $this->random_int()], ['datacenter' => $this->datacenter]));
+        }
     }
 
     public function hasPendingCalls()
@@ -247,17 +226,50 @@ class Connection
 
         $dc_config_number = isset($API->settings['connection_settings'][$datacenter]) ? $datacenter : 'all';
         $timeout = $API->settings['connection_settings'][$dc_config_number]['timeout'];
+        $pfs = $API->settings['connection_settings'][$dc_config_number]['pfs'];
+
         foreach ($this->new_outgoing as $message_id) {
             if (isset($this->outgoing_messages[$message_id]['sent'])
                 && $this->outgoing_messages[$message_id]['sent'] + $timeout < time()
                 && ($this->temp_auth_key === null) === $this->outgoing_messages[$message_id]['unencrypted']
                 && $this->outgoing_messages[$message_id]['_'] !== 'msgs_state_req'
             ) {
+                if ($pfs && !isset($this->temp_auth_key['bound']) && $this->outgoing_messages[$message_id]['_'] !== 'auth.bindTempAuthKey') {
+                    continue;
+                }
+
                 return true;
             }
         }
 
         return false;
+    }
+
+    public function getPendingCalls()
+    {
+        $API = $this->API;
+        $datacenter = $this->datacenter;
+
+        $dc_config_number = isset($API->settings['connection_settings'][$datacenter]) ? $datacenter : 'all';
+        $timeout = $API->settings['connection_settings'][$dc_config_number]['timeout'];
+        $pfs = $API->settings['connection_settings'][$dc_config_number]['pfs'];
+
+        $result = [];
+        foreach ($this->new_outgoing as $message_id) {
+            if (isset($this->outgoing_messages[$message_id]['sent'])
+                && $this->outgoing_messages[$message_id]['sent'] + $timeout < time()
+                && ($this->temp_auth_key === null) === $this->outgoing_messages[$message_id]['unencrypted']
+                && $this->outgoing_messages[$message_id]['_'] !== 'msgs_state_req'
+            ) {
+                if ($pfs && !isset($this->temp_auth_key['bound']) && $this->outgoing_messages[$message_id]['_'] !== 'auth.bindTempAuthKey') {
+                    continue;
+                }
+
+                $result[] = $message_id;
+            }
+        }
+
+        return $result;
     }
 
     public function getName(): string

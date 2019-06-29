@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -26,11 +26,7 @@ class Exception extends \Exception
 
     public function __toString()
     {
-        $result = $this->file === 'MadelineProto' ? $this->message : '\\danog\\MadelineProto\\Exception'.($this->message !== '' ? ': ' : '').$this->message.' in '.$this->file.':'.$this->line.PHP_EOL.\danog\MadelineProto\Magic::$revision.PHP_EOL.'TL Trace (YOU ABSOLUTELY MUST READ THE TEXT BELOW):'.PHP_EOL.$this->getTLTrace();
-        if (php_sapi_name() !== 'cli') {
-            $result = str_replace(PHP_EOL, '<br>'.PHP_EOL, $result);
-        }
-        return $result;
+        return $this->file === 'MadelineProto' ? $this->message : '\\danog\\MadelineProto\\Exception'.($this->message !== '' ? ': ' : '').$this->message.' in '.$this->file.':'.$this->line.PHP_EOL.\danog\MadelineProto\Magic::$revision.PHP_EOL.'TL Trace (YOU ABSOLUTELY MUST READ THE TEXT BELOW):'.PHP_EOL.$this->getTLTrace();
     }
 
     public function __construct($message = null, $code = 0, self $previous = null, $file = null, $line = null)
@@ -71,7 +67,7 @@ class Exception extends \Exception
         if (strpos($message, 'pg_query') !== false || strpos($message, 'Undefined variable: ') !== false || strpos($message, 'socket_write') !== false || strpos($message, 'socket_read') !== false || strpos($message, 'Received request to switch to DC ') !== false || strpos($message, "Couldn't get response") !== false || strpos($message, 'Re-executing query...') !== false || strpos($message, "Couldn't find peer by provided") !== false || strpos($message, 'id.pwrtelegram.xyz') !== false || strpos($message, 'Please update ') !== false || strpos($message, 'posix_isatty') !== false) {
             return;
         }
-        if (self::$rollbar) {
+        if (self::$rollbar && class_exists('\\Rollbar\\Rollbar')) {
             \Rollbar\Rollbar::log(\Rollbar\Payload\Level::error(), $this, debug_backtrace(0));
         }
     }
@@ -89,5 +85,15 @@ class Exception extends \Exception
         }
 
         throw new self($errstr, $errno, null, $errfile, $errline);
+    }
+
+    /**
+     * ExceptionErrorHandler.
+     *
+     * Error handler
+     */
+    public static function ExceptionHandler($exception)
+    {
+        Logger::log($exception, Logger::FATAL_ERROR);
     }
 }

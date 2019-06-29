@@ -11,11 +11,10 @@ interface auth
 {
     /**
      * @param array params [
-     *               boolean allow_flashcall,
      *               string phone_number,
-     *               Bool current_number,
      *               int api_id,
      *               string api_hash,
+     *               CodeSettings settings,
      *              ]
      *
      * @return auth_SentCode
@@ -222,9 +221,13 @@ interface account
     public function updateStatus(array $params);
 
     /**
-     * @return Vector_of_WallPaper
+     * @param array params [
+     *               int hash,
+     *              ]
+     *
+     * @return account_WallPapers
      */
-    public function getWallPapers();
+    public function getWallPapers(array $params);
 
     /**
      * @param array params [
@@ -298,9 +301,8 @@ interface account
 
     /**
      * @param array params [
-     *               boolean allow_flashcall,
      *               string phone_number,
-     *               Bool current_number,
+     *               CodeSettings settings,
      *              ]
      *
      * @return auth_SentCode
@@ -367,9 +369,8 @@ interface account
 
     /**
      * @param array params [
-     *               boolean allow_flashcall,
      *               string hash,
-     *               Bool current_number,
+     *               CodeSettings settings,
      *              ]
      *
      * @return auth_SentCode
@@ -474,9 +475,8 @@ interface account
 
     /**
      * @param array params [
-     *               boolean allow_flashcall,
      *               string phone_number,
-     *               Bool current_number,
+     *               CodeSettings settings,
      *              ]
      *
      * @return auth_SentCode
@@ -579,6 +579,68 @@ interface account
      * @return Updates
      */
     public function getNotifyExceptions(array $params);
+
+    /**
+     * @param array params [
+     *               InputWallPaper wallpaper,
+     *              ]
+     *
+     * @return WallPaper
+     */
+    public function getWallPaper(array $params);
+
+    /**
+     * @param array params [
+     *               InputFile file,
+     *               string mime_type,
+     *               WallPaperSettings settings,
+     *              ]
+     *
+     * @return WallPaper
+     */
+    public function uploadWallPaper(array $params);
+
+    /**
+     * @param array params [
+     *               InputWallPaper wallpaper,
+     *               Bool unsave,
+     *               WallPaperSettings settings,
+     *              ]
+     *
+     * @return bool
+     */
+    public function saveWallPaper(array $params);
+
+    /**
+     * @param array params [
+     *               InputWallPaper wallpaper,
+     *               WallPaperSettings settings,
+     *              ]
+     *
+     * @return bool
+     */
+    public function installWallPaper(array $params);
+
+    /**
+     * @return bool
+     */
+    public function resetWallPapers();
+
+    /**
+     * @return account_AutoDownloadSettings
+     */
+    public function getAutoDownloadSettings();
+
+    /**
+     * @param array params [
+     *               boolean low,
+     *               boolean high,
+     *               AutoDownloadSettings settings,
+     *              ]
+     *
+     * @return bool
+     */
+    public function saveAutoDownloadSettings(array $params);
 }
 
 interface users
@@ -651,16 +713,7 @@ interface contacts
      *               InputUser id,
      *              ]
      *
-     * @return contacts_Link
-     */
-    public function deleteContact(array $params);
-
-    /**
-     * @param array params [
-     *               InputUser id,
-     *              ]
-     *
-     * @return bool
+     * @return Updates
      */
     public function deleteContacts(array $params);
 
@@ -726,6 +779,8 @@ interface contacts
      *               boolean bots_pm,
      *               boolean bots_inline,
      *               boolean phone_calls,
+     *               boolean forward_users,
+     *               boolean forward_chats,
      *               boolean groups,
      *               boolean channels,
      *               int offset,
@@ -765,6 +820,37 @@ interface contacts
      * @return bool
      */
     public function toggleTopPeers(array $params);
+
+    /**
+     * @param array params [
+     *               boolean add_phone_privacy_exception,
+     *               InputUser id,
+     *               string first_name,
+     *               string last_name,
+     *               string phone,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function addContact(array $params);
+
+    /**
+     * @param array params [
+     *               InputUser id,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function acceptContact(array $params);
+
+    /**
+     * @param array params [
+     *               InputGeoPoint geo_point,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function getLocated(array $params);
 }
 
 interface messages
@@ -781,6 +867,7 @@ interface messages
     /**
      * @param array params [
      *               boolean exclude_pinned,
+     *               int folder_id,
      *               int offset_date,
      *               int offset_id,
      *               InputPeer offset_peer,
@@ -841,6 +928,7 @@ interface messages
     /**
      * @param array params [
      *               boolean just_clear,
+     *               boolean revoke,
      *               InputPeer peer,
      *               int max_id,
      *              ]
@@ -935,15 +1023,6 @@ interface messages
      * @return bool
      */
     public function reportSpam(array $params);
-
-    /**
-     * @param array params [
-     *               InputPeer peer,
-     *              ]
-     *
-     * @return bool
-     */
-    public function hideReportSpam(array $params);
 
     /**
      * @param array params [
@@ -1183,7 +1262,7 @@ interface messages
 
     /**
      * @param array params [
-     *               int chat_id,
+     *               InputPeer peer,
      *              ]
      *
      * @return ExportedChatInvite
@@ -1261,16 +1340,6 @@ interface messages
     /**
      * @param array params [
      *               int chat_id,
-     *               Bool enabled,
-     *              ]
-     *
-     * @return Updates
-     */
-    public function toggleChatAdmins(array $params);
-
-    /**
-     * @param array params [
-     *               int chat_id,
      *               InputUser user_id,
      *               Bool is_admin,
      *              ]
@@ -1290,8 +1359,9 @@ interface messages
 
     /**
      * @param array params [
+     *               int folder_id,
      *               string q,
-     *               int offset_date,
+     *               int offset_rate,
      *               InputPeer offset_peer,
      *               int offset_id,
      *               int limit,
@@ -1654,6 +1724,7 @@ interface messages
     /**
      * @param array params [
      *               boolean force,
+     *               int folder_id,
      *               InputDialogPeer order,
      *              ]
      *
@@ -1662,9 +1733,13 @@ interface messages
     public function reorderPinnedDialogs(array $params);
 
     /**
+     * @param array params [
+     *               int folder_id,
+     *              ]
+     *
      * @return messages_PeerDialogs
      */
-    public function getPinnedDialogs();
+    public function getPinnedDialogs(array $params);
 
     /**
      * @param array params [
@@ -1864,12 +1939,113 @@ interface messages
 
     /**
      * @param array params [
+     *               boolean dark,
      *               InputPeer peer,
+     *               string params,
      *              ]
      *
      * @return StatsURL
      */
     public function getStatsURL(array $params);
+
+    /**
+     * @param array params [
+     *               InputPeer peer,
+     *               string about,
+     *              ]
+     *
+     * @return bool
+     */
+    public function editChatAbout(array $params);
+
+    /**
+     * @param array params [
+     *               InputPeer peer,
+     *               ChatBannedRights banned_rights,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function editChatDefaultBannedRights(array $params);
+
+    /**
+     * @param array params [
+     *               string lang_code,
+     *              ]
+     *
+     * @return EmojiKeywordsDifference
+     */
+    public function getEmojiKeywords(array $params);
+
+    /**
+     * @param array params [
+     *               string lang_code,
+     *               int from_version,
+     *              ]
+     *
+     * @return EmojiKeywordsDifference
+     */
+    public function getEmojiKeywordsDifference(array $params);
+
+    /**
+     * @param array params [
+     *               string lang_codes,
+     *              ]
+     *
+     * @return Vector_of_EmojiLanguage
+     */
+    public function getEmojiKeywordsLanguages(array $params);
+
+    /**
+     * @param array params [
+     *               string lang_code,
+     *              ]
+     *
+     * @return EmojiURL
+     */
+    public function getEmojiURL(array $params);
+
+    /**
+     * @param array params [
+     *               InputPeer peer,
+     *               MessagesFilter filters,
+     *              ]
+     *
+     * @return Vector_of_messages_SearchCounter
+     */
+    public function getSearchCounters(array $params);
+
+    /**
+     * @param array params [
+     *               InputPeer peer,
+     *               int msg_id,
+     *               int button_id,
+     *              ]
+     *
+     * @return UrlAuthResult
+     */
+    public function requestUrlAuth(array $params);
+
+    /**
+     * @param array params [
+     *               boolean write_allowed,
+     *               InputPeer peer,
+     *               int msg_id,
+     *               int button_id,
+     *              ]
+     *
+     * @return UrlAuthResult
+     */
+    public function acceptUrlAuth(array $params);
+
+    /**
+     * @param array params [
+     *               InputPeer peer,
+     *              ]
+     *
+     * @return bool
+     */
+    public function hidePeerSettingsBar(array $params);
 }
 
 interface updates
@@ -2277,6 +2453,8 @@ interface channels
      *               boolean megagroup,
      *               string title,
      *               string about,
+     *               InputGeoPoint geo_point,
+     *               string address,
      *              ]
      *
      * @return Updates
@@ -2286,18 +2464,8 @@ interface channels
     /**
      * @param array params [
      *               InputChannel channel,
-     *               string about,
-     *              ]
-     *
-     * @return bool
-     */
-    public function editAbout(array $params);
-
-    /**
-     * @param array params [
-     *               InputChannel channel,
      *               InputUser user_id,
-     *               ChannelAdminRights admin_rights,
+     *               ChatAdminRights admin_rights,
      *              ]
      *
      * @return Updates
@@ -2377,28 +2545,9 @@ interface channels
      *               InputChannel channel,
      *              ]
      *
-     * @return ExportedChatInvite
-     */
-    public function exportInvite(array $params);
-
-    /**
-     * @param array params [
-     *               InputChannel channel,
-     *              ]
-     *
      * @return Updates
      */
     public function deleteChannel(array $params);
-
-    /**
-     * @param array params [
-     *               InputChannel channel,
-     *               Bool enabled,
-     *              ]
-     *
-     * @return Updates
-     */
-    public function toggleInvites(array $params);
 
     /**
      * @param array params [
@@ -2422,15 +2571,20 @@ interface channels
     public function toggleSignatures(array $params);
 
     /**
+     * @param array params [
+     *               boolean by_location,
+     *               boolean check_limit,
+     *              ]
+     *
      * @return messages_Chats
      */
-    public function getAdminedPublicChannels();
+    public function getAdminedPublicChannels(array $params);
 
     /**
      * @param array params [
      *               InputChannel channel,
      *               InputUser user_id,
-     *               ChannelBannedRights banned_rights,
+     *               ChatBannedRights banned_rights,
      *              ]
      *
      * @return Updates
@@ -2500,6 +2654,43 @@ interface channels
      * @return messages_Chats
      */
     public function getLeftChannels(array $params);
+
+    /**
+     * @return messages_Chats
+     */
+    public function getGroupsForDiscussion();
+
+    /**
+     * @param array params [
+     *               InputChannel broadcast,
+     *               InputChannel group,
+     *              ]
+     *
+     * @return bool
+     */
+    public function setDiscussionGroup(array $params);
+
+    /**
+     * @param array params [
+     *               InputChannel channel,
+     *               InputUser user_id,
+     *               InputCheckPasswordSRP password,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function editCreator(array $params);
+
+    /**
+     * @param array params [
+     *               InputChannel channel,
+     *               InputGeoPoint geo_point,
+     *               string address,
+     *              ]
+     *
+     * @return bool
+     */
+    public function editLocation(array $params);
 }
 
 interface bots
@@ -2638,6 +2829,7 @@ interface phone
 
     /**
      * @param array params [
+     *               boolean video,
      *               InputUser user_id,
      *               bytes g_a_hash,
      *               PhoneCallProtocol protocol,
@@ -2681,6 +2873,7 @@ interface phone
 
     /**
      * @param array params [
+     *               boolean video,
      *               InputPhoneCall peer,
      *               int duration,
      *               PhoneCallDiscardReason reason,
@@ -2693,6 +2886,7 @@ interface phone
 
     /**
      * @param array params [
+     *               boolean user_initiative,
      *               InputPhoneCall peer,
      *               int rating,
      *               string comment,
@@ -2738,6 +2932,7 @@ interface langpack
 
     /**
      * @param array params [
+     *               string lang_pack,
      *               string lang_code,
      *               int from_version,
      *              ]
@@ -2764,4 +2959,25 @@ interface langpack
      * @return LangPackLanguage
      */
     public function getLanguage(array $params);
+}
+
+interface folders
+{
+    /**
+     * @param array params [
+     *               InputFolderPeer folder_peers,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function editPeerFolders(array $params);
+
+    /**
+     * @param array params [
+     *               int folder_id,
+     *              ]
+     *
+     * @return Updates
+     */
+    public function deleteFolder(array $params);
 }

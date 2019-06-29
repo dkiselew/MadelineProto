@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -37,11 +37,10 @@ class CombinedAPI
     public function __magic_construct($session, $paths = [])
     {
         set_error_handler(['\\danog\\MadelineProto\\Exception', 'ExceptionErrorHandler']);
-        $realpaths = Serialization::realpaths($session);
-
-        $this->session = $realpaths['file'];
-
         \danog\MadelineProto\Magic::class_exists();
+
+        $realpaths = Serialization::realpaths($session);
+        $this->session = $realpaths['file'];
 
         foreach ($paths as $path => $settings) {
             $this->addInstance($path, $settings);
@@ -122,6 +121,7 @@ class CombinedAPI
         if (\danog\MadelineProto\Magic::$has_thread && is_object(\Thread::getCurrentThread()) || Magic::is_fork()) {
             return;
         }
+
         $this->serialize();
     }
 
@@ -138,7 +138,6 @@ class CombinedAPI
             $filename = $this->session;
         }
         Logger::log(\danog\MadelineProto\Lang::$current_lang['serializing_madelineproto']);
-
         $realpaths = Serialization::realpaths($filename);
         if (!file_exists($realpaths['lockfile'])) {
             touch($realpaths['lockfile']);
@@ -177,7 +176,7 @@ class CombinedAPI
         if (!($this->event_handler_instance instanceof $this->event_handler)) {
             $class_name = $this->event_handler;
             $this->event_handler_instance = new $class_name($this);
-        } elseif ($this->event_handler_instance) {
+        } else {
             $this->event_handler_instance->__construct($this);
         }
         $this->event_handler_methods = [];
@@ -186,7 +185,7 @@ class CombinedAPI
             if ($method === 'onLoop') {
                 $this->loop_callback = [$this->event_handler_instance, 'onLoop'];
             } elseif ($method === 'onAny') {
-                foreach (end($this->instances)->API->constructors->by_id as $id => $constructor) {
+                foreach (end($this->instances)->API->constructors->by_id as $constructor) {
                     if ($constructor['type'] === 'Update' && !isset($this->event_handler_methods[$constructor['predicate']])) {
                         $this->event_handler_methods[$constructor['predicate']] = [$this->event_handler_instance, 'onAny'];
                     }
@@ -226,32 +225,25 @@ class CombinedAPI
 
     public function loop($max_forks = 0)
     {
-        if (php_sapi_name() !== 'cli') {
-            try {
-                set_time_limit(-1);
-            } catch (\danog\MadelineProto\Exception $e) {
-                register_shutdown_function(function () {
-                    \danog\MadelineProto\Logger::log(['Restarting script...']);
-                    $a = fsockopen((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] ? 'tls' : 'tcp').'://'.$_SERVER['SERVER_NAME'], $_SERVER['SERVER_PORT']);
-                    fwrite($a, $_SERVER['REQUEST_METHOD'].' '.$_SERVER['REQUEST_URI'].' '.$_SERVER['SERVER_PROTOCOL']."\r\n".'Host: '.$_SERVER['SERVER_NAME']."\r\n\r\n");
-                });
-            }
+        if (is_callable($max_forks)) {
+            return $this->wait($max_forks());
         }
 
         $loops = [];
         foreach ($this->instances as $path => $instance) {
+            $this->wait($instance->initAsync());
             if ($instance->API->authorized !== MTProto::LOGGED_IN) {
                 continue;
             }
             if (!$instance->API->settings['updates']['handle_updates']) {
                 $instance->API->settings['updates']['handle_updates'] = true;
-                $instance->API->datacenter->sockets[$instance->API->settings['connection_settings']['default_dc']]->updater->start();
+                $instance->API->startUpdateSystem();
             }
             $instance->setCallback(function ($update) use ($path) {
                 return $this->event_update_handler($update, $path);
-            });
+            }, ['async' => false]);
             if ($this->loop_callback !== null) {
-                $instance->setLoopCallback($this->loop_callback);
+                $instance->setLoopCallback($this->loop_callback, ['async' => false]);
             }
             $loops[] = $this->call($instance->loop(0, ['async' => true]));
         }

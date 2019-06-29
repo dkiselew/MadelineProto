@@ -1,7 +1,8 @@
 #!/usr/bin/env php
 <?php
+
 /*
-Copyright 2016-2018 Daniil Gentili
+Copyright 2016-2019 Daniil Gentili
 (https://daniil.it)
 This file is part of MadelineProto.
 MadelineProto is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -9,7 +10,7 @@ MadelineProto is distributed in the hope that it will be useful, but WITHOUT ANY
 See the GNU Affero General Public License for more details.
 You should have received a copy of the GNU General Public License along with MadelineProto.
 If not, see <http://www.gnu.org/licenses/>.
-*/
+ */
 set_include_path(get_include_path().':'.realpath(dirname(__FILE__).'/MadelineProto/'));
 
 if (!file_exists(__DIR__.'/vendor/autoload.php')) {
@@ -29,12 +30,12 @@ if (!file_exists('songs.php')) {
 echo 'Deserializing MadelineProto from session.madeline...'.PHP_EOL;
 
 /*if (!isset($MadelineProto->inputEncryptedFilePhoto) && false) {
-    $MadelineProto->inputEncryptedFilePhoto = $MadelineProto->upload_encrypted('tests/faust.jpg', 'fausticorn.jpg'); // This gets an inputFile object with file name magic
-    $MadelineProto->inputEncryptedFileGif = $MadelineProto->upload_encrypted('tests/pony.mp4');
-    $MadelineProto->inputEncryptedFileSticker = $MadelineProto->upload_encrypted('tests/lel.webp');
-    $MadelineProto->inputEncryptedFileDocument = $MadelineProto->upload_encrypted('tests/60', 'magic'); // This gets an inputFile object with file name magic
-    $MadelineProto->inputEncryptedFileVideo = $MadelineProto->upload_encrypted('tests/swing.mp4');
-    $MadelineProto->inputEncryptedFileAudio = $MadelineProto->upload_encrypted('tests/mosconi.mp3');
+$MadelineProto->inputEncryptedFilePhoto = $MadelineProto->upload_encrypted('tests/faust.jpg', 'fausticorn.jpg'); // This gets an inputFile object with file name magic
+$MadelineProto->inputEncryptedFileGif = $MadelineProto->upload_encrypted('tests/pony.mp4');
+$MadelineProto->inputEncryptedFileSticker = $MadelineProto->upload_encrypted('tests/lel.webp');
+$MadelineProto->inputEncryptedFileDocument = $MadelineProto->upload_encrypted('tests/60', 'magic'); // This gets an inputFile object with file name magic
+$MadelineProto->inputEncryptedFileVideo = $MadelineProto->upload_encrypted('tests/swing.mp4');
+$MadelineProto->inputEncryptedFileAudio = $MadelineProto->upload_encrypted('tests/mosconi.mp3');
 }*/
 
 class EventHandler extends \danog\MadelineProto\EventHandler
@@ -45,14 +46,6 @@ class EventHandler extends \danog\MadelineProto\EventHandler
         $call->configuration['enable_NS'] = false;
         $call->configuration['enable_AGC'] = false;
         $call->configuration['enable_AEC'] = false;
-        $call->configuration['shared_config'] = [
-            'audio_init_bitrate'      => 100 * 1000,
-            'audio_max_bitrate'       => 100 * 1000,
-            'audio_min_bitrate'       => 10 * 1000,
-            'audio_congestion_window' => 4 * 1024,
-            //'audio_bitrate_step_decr' => 0,
-            //'audio_bitrate_step_incr' => 2000,
-        ];
         $call->configuration['log_file_path'] = '/tmp/logs'.$call->getCallID()['id'].'.log'; // Default is /dev/null
         //$call->configuration["stats_dump_file_path"] = "/tmp/stats".$call->getCallID()['id'].".txt"; // Default is /dev/null
         $call->parseConfig();
@@ -248,24 +241,24 @@ Propic art by @magnaluna on [deviantart](https://magnaluna.deviantart.com).", 'p
                         'reply_to_msg_id' => $this->times[$call->getOtherID()][1],
                         'peer' => $call->getOtherID(), 'message' => 'Call statistics by @magnaluna',
                         'media' => [
-                            '_' => 'inputMediaUploadedDocument',
-                            'file' => "/tmp/stats".$call->getCallID()['id'].".txt",
-                            'attributes' => [
-                                ['_' => 'documentAttributeFilename', 'file_name' => "stats".$call->getCallID()['id'].".txt"]
-                            ]
+                        '_' => 'inputMediaUploadedDocument',
+                        'file' => "/tmp/stats".$call->getCallID()['id'].".txt",
+                        'attributes' => [
+                        ['_' => 'documentAttributeFilename', 'file_name' => "stats".$call->getCallID()['id'].".txt"]
+                        ]
                         ],
                         ]);*/
                         $this->messages->sendMedia([
-                    'reply_to_msg_id' => $this->times[$call->getOtherID()][1],
-                    'peer'            => $call->getOtherID(), 'message' => 'Debug info by @magnaluna',
-                    'media'           => [
-                        '_'          => 'inputMediaUploadedDocument',
-                        'file'       => '/tmp/logs'.$call->getCallID()['id'].'.log',
-                        'attributes' => [
-                            ['_' => 'documentAttributeFilename', 'file_name' => 'logs'.$call->getCallID()['id'].'.log'],
-                        ],
-                    ],
-                    ]);
+                            'reply_to_msg_id' => $this->times[$call->getOtherID()][1],
+                            'peer'            => $call->getOtherID(), 'message' => 'Debug info by @magnaluna',
+                            'media'           => [
+                                '_'          => 'inputMediaUploadedDocument',
+                                'file'       => '/tmp/logs'.$call->getCallID()['id'].'.log',
+                                'attributes' => [
+                                    ['_' => 'documentAttributeFilename', 'file_name' => 'logs'.$call->getCallID()['id'].'.log'],
+                                ],
+                            ],
+                        ]);
                     }
                 } catch (\danog\MadelineProto\Exception $e) {
                     echo $e;
@@ -289,7 +282,20 @@ Propic art by @magnaluna on [deviantart](https://magnaluna.deviantart.com).", 'p
         }
     }
 }
-$MadelineProto = new \danog\MadelineProto\API('session.madeline', ['secret_chats' => ['accept_chats' => false], 'logger' => ['logger' => 3, 'logger_param' => getcwd().'/MadelineProto.log']]);
+
+if (!class_exists('\\danog\\MadelineProto\\VoIPServerConfig')) {
+    die('Install the libtgvoip extension: https://voip.madelineproto.xyz'.PHP_EOL);
+}
+
+\danog\MadelineProto\VoIPServerConfig::update(
+    [
+        'audio_init_bitrate'      => 100 * 1000,
+        'audio_max_bitrate'       => 100 * 1000,
+        'audio_min_bitrate'       => 10 * 1000,
+        'audio_congestion_window' => 4 * 1024,
+    ]
+);
+$MadelineProto = new \danog\MadelineProto\API('session.madeline', ['secret_chats' => ['accept_chats' => false], 'logger' => ['logger' => 3, 'logger_level' => 5, 'logger_param' => getcwd().'/MadelineProto.log']]);
 $MadelineProto->start();
 
 if (!isset($MadelineProto->programmed_call)) {

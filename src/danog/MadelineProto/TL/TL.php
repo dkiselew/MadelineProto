@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -224,12 +224,12 @@ trait TL
                 throw new Exception('Invalid callback object provided!');
             }
             $new = [
-                TLCallback::METHOD_BEFORE_CALLBACK         => $object->getMethodBeforeCallbacks(),
-                TLCallback::METHOD_CALLBACK                => $object->getMethodCallbacks(),
-                TLCallback::CONSTRUCTOR_BEFORE_CALLBACK    => $object->getConstructorBeforeCallbacks(),
-                TLCallback::CONSTRUCTOR_CALLBACK           => $object->getConstructorCallbacks(),
+                TLCallback::METHOD_BEFORE_CALLBACK => $object->getMethodBeforeCallbacks(),
+                TLCallback::METHOD_CALLBACK => $object->getMethodCallbacks(),
+                TLCallback::CONSTRUCTOR_BEFORE_CALLBACK => $object->getConstructorBeforeCallbacks(),
+                TLCallback::CONSTRUCTOR_CALLBACK => $object->getConstructorCallbacks(),
                 TLCallback::CONSTRUCTOR_SERIALIZE_CALLBACK => $object->getConstructorSerializeCallbacks(),
-                TLCallback::TYPE_MISMATCH_CALLBACK         => $object->getTypeMismatchCallbacks(),
+                TLCallback::TYPE_MISMATCH_CALLBACK => $object->getTypeMismatchCallbacks(),
             ];
             foreach ($new as $type => $values) {
                 foreach ($values as $match => $callback) {
@@ -390,7 +390,7 @@ trait TL
         if ($type['type'] === 'InputMessage' && !is_array($object)) {
             $object = ['_' => 'inputMessageID', 'id' => $object];
         } elseif (isset($this->tl_callbacks[TLCallback::TYPE_MISMATCH_CALLBACK][$type['type']]) && (!is_array($object) || isset($object['_']) && $this->constructors->find_by_predicate($object['_'])['type'] !== $type['type'])) {
-            $object = $this->tl_callbacks[TLCallback::TYPE_MISMATCH_CALLBACK][$type['type']]($object);
+            $object = yield $this->tl_callbacks[TLCallback::TYPE_MISMATCH_CALLBACK][$type['type']]($object);
             if (!isset($object[$type['type']])) {
                 throw new \danog\MadelineProto\Exception("Could not convert {$type['type']} object");
             }
@@ -405,7 +405,7 @@ trait TL
             $object['_'] = $constructorData['predicate'];
         }
         if (isset($this->tl_callbacks[TLCallback::CONSTRUCTOR_SERIALIZE_CALLBACK][$object['_']])) {
-            $object = $this->tl_callbacks[TLCallback::CONSTRUCTOR_SERIALIZE_CALLBACK][$object['_']]($object);
+            $object = yield $this->tl_callbacks[TLCallback::CONSTRUCTOR_SERIALIZE_CALLBACK][$object['_']]($object);
         }
 
         $predicate = $object['_'];
@@ -430,16 +430,7 @@ trait TL
             $concat = $constructorData['id'];
         }
 
-        return $concat.yield $this->serialize_params($constructorData, $object, '', $layer);
-    }
-
-    public function serialize_object($type, $object, $ctx, $layer = -1)
-    {
-        return $this->wait($this->serialize_object_async($type, $object, $ctx, $layer));
-    }
-    public function serialize_method($method, $arguments)
-    {
-        return $this->wait($this->serialize_method_async($method, $arguments));
+        return $concat.yield $this->serialize_params_async($constructorData, $object, '', $layer);
     }
 
     public function serialize_method_async($method, $arguments)
@@ -458,7 +449,7 @@ trait TL
                 $method = 'messages.importChatInvite';
                 $arguments['hash'] = $matches[2];
             }
-        } elseif ($method === 'messages.sendMessage' && isset($arguments['peer']['_']) && $arguments['peer']['_'] === 'inputEncryptedChat') {
+        } elseif ($method === 'messages.sendMessage' && isset($arguments['peer']['_']) && in_array($arguments['peer']['_'], ['inputEncryptedChat', 'updateEncryption', 'updateEncryptedChatTyping', 'updateEncryptedMessagesRead', 'updateNewEncryptedMessage', 'encryptedMessage', 'encryptedMessageService'])) {
             $method = 'messages.sendEncrypted';
             $arguments = ['peer' => $arguments['peer'], 'message' => $arguments];
             if (!isset($arguments['message']['_'])) {
@@ -483,7 +474,7 @@ trait TL
                 }
             }
         } elseif (in_array($method, ['messages.addChatUser', 'messages.deleteChatUser', 'messages.editChatAdmin', 'messages.editChatPhoto', 'messages.editChatTitle', 'messages.getFullChat', 'messages.exportChatInvite', 'messages.editChatAdmin', 'messages.migrateChat']) && isset($arguments['chat_id']) && (!is_numeric($arguments['chat_id']) || $arguments['chat_id'] < 0)) {
-            $res = $this->get_info($arguments['chat_id']);
+            $res = yield $this->get_info_async($arguments['chat_id']);
             if ($res['type'] !== 'chat') {
                 throw new \danog\MadelineProto\Exception('chat_id is not a chat id (only normal groups allowed, not supergroups)!');
             }
@@ -513,13 +504,13 @@ trait TL
             throw new Exception(\danog\MadelineProto\Lang::$current_lang['method_not_found'].$method);
         }
 
-        return $tl['id'].yield $this->serialize_params($tl, $arguments, $method);
+        return $tl['id'].yield $this->serialize_params_async($tl, $arguments, $method);
     }
 
-    public function serialize_params($tl, $arguments, $ctx, $layer = -1)
+    public function serialize_params_async($tl, $arguments, $ctx, $layer = -1)
     {
         $serialized = '';
-        $arguments = $this->botAPI_to_MTProto($arguments);
+        $arguments = yield $this->botAPI_to_MTProto_async($arguments);
         $flags = 0;
         foreach ($tl['params'] as $cur_flag) {
             if (isset($cur_flag['pow'])) {
@@ -553,7 +544,7 @@ trait TL
                     continue;
                 }
                 if ($current_argument['name'] === 'data' && isset($tl['method']) && in_array($tl['method'], ['messages.sendEncrypted', 'messages.sendEncryptedFile', 'messages.sendEncryptedService']) && isset($arguments['message'])) {
-                    $serialized .= yield $this->serialize_object_async($current_argument, $this->encrypt_secret_message($arguments['peer']['chat_id'], $arguments['message']), 'data');
+                    $serialized .= yield $this->serialize_object_async($current_argument, yield $this->encrypt_secret_message_async($arguments['peer']['chat_id'], $arguments['message']), 'data');
                     continue;
                 }
                 if ($current_argument['name'] === 'random_id') {
@@ -617,7 +608,7 @@ trait TL
 
             if ($current_argument['type'] === 'InputEncryptedChat' && (!is_array($arguments[$current_argument['name']]) || isset($arguments[$current_argument['name']]['_']) && $this->constructors->find_by_predicate($arguments[$current_argument['name']]['_'])['type'] !== $current_argument['type'])) {
                 if (is_array($arguments[$current_argument['name']])) {
-                    $arguments[$current_argument['name']] = $this->get_info($arguments[$current_argument['name']])['InputEncryptedChat'];
+                    $arguments[$current_argument['name']] = (yield $this->get_info_async($arguments[$current_argument['name']]))['InputEncryptedChat'];
                 } else {
                     if (!isset($this->secret_chats[$arguments[$current_argument['name']]])) {
                         throw new \danog\MadelineProto\Exception(\danog\MadelineProto\Lang::$current_lang['sec_peer_not_in_db']);
@@ -859,7 +850,7 @@ trait TL
 
         if (isset($this->tl_callbacks[TLCallback::CONSTRUCTOR_CALLBACK][$x['_']])) {
             foreach ($this->tl_callbacks[TLCallback::CONSTRUCTOR_CALLBACK][$x['_']] as $callback) {
-                $callback($x);
+                $this->callFork($callback($x));
             }
         } elseif ($x['_'] === 'rpc_result'
             && isset($this->datacenter->sockets[$type['datacenter']]->outgoing_messages[$x['req_msg_id']]['_'])

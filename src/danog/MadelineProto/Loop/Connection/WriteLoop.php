@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -18,13 +18,13 @@
 
 namespace danog\MadelineProto\Loop\Connection;
 
-use Amp\Coroutine;
-use Amp\Success;
 use danog\MadelineProto\Connection;
 use danog\MadelineProto\Logger;
 use danog\MadelineProto\Loop\Impl\ResumableSignalLoop;
+use danog\MadelineProto\Magic;
 use danog\MadelineProto\MTProtoTools\Crypt;
 use danog\MadelineProto\Tools;
+use Amp\ByteStream\StreamException;
 
 /**
  * Socket write loop.
@@ -36,43 +36,50 @@ class WriteLoop extends ResumableSignalLoop
     use Crypt;
     use Tools;
 
+    protected $connection;
+    protected $datacenter;
+
+    public function __construct($API, $datacenter)
+    {
+        $this->API = $API;
+        $this->datacenter = $datacenter;
+        $this->connection = $API->datacenter->sockets[$datacenter];
+    }
+
     public function loop(): \Generator
     {
         $API = $this->API;
-        $datacenter = $this->datacenter;
         $connection = $this->connection;
+        $datacenter = $this->datacenter;
 
-        $this->startedLoop();
-        $API->logger->logger("Entered write loop in DC {$datacenter}", Logger::ULTRA_VERBOSE);
-
+        $please_wait = false;
         while (true) {
-            if (empty($connection->pending_outgoing)) {
+            while (empty($connection->pending_outgoing) || $please_wait) {
+                $please_wait = false;
+                $API->logger->logger("Waiting in $this", Logger::ULTRA_VERBOSE);
                 if (yield $this->waitSignal($this->pause())) {
-                    $API->logger->logger('Exiting write loop');
-                    $this->exitedLoop();
-                    yield new Success(0);
-
                     return;
                 }
+                $API->logger->logger("Done waiting in $this", Logger::ULTRA_VERBOSE);
             }
 
             try {
-                if ($connection->temp_auth_key === null) {
-                    $res = $this->unencryptedWriteLoopAsync();
-                } else {
-                    $res = $this->encryptedWriteLoopAsync();
+                $please_wait = yield $this->{$connection->temp_auth_key === null ? 'unencryptedWriteLoopAsync' : 'encryptedWriteLoopAsync'}();
+            } catch (StreamException $e) {
+                if (isset($connection->old)) {
+                    return;
                 }
-                yield $res;
-            } finally {
-                $this->exitedLoop();
+                $API->logger($e);
+                $API->logger->logger("Got nothing in the socket in DC {$datacenter}, reconnecting...", Logger::ERROR);
+                yield $connection->reconnect();
+                continue;
             }
-            $this->startedLoop();
 
             //$connection->waiter->resume();
         }
     }
 
-    public function unencryptedWriteLoopAsync(): \Generator
+    public function unencryptedWriteLoopAsync()
     {
         $API = $this->API;
         $datacenter = $this->datacenter;
@@ -89,12 +96,10 @@ class WriteLoop extends ResumableSignalLoop
                 }
                 $skipped_all = false;
 
-                $body = $message['serialized_body'];
-
                 $API->logger->logger("Sending {$message['_']} as unencrypted message to DC {$datacenter}", \danog\MadelineProto\Logger::ULTRA_VERBOSE);
 
                 $message_id = isset($message['msg_id']) ? $message['msg_id'] : $connection->generate_message_id();
-                $length = strlen($body);
+                $length = strlen($message['serialized_body']);
 
                 $pad_length = -$length & 15;
                 $pad_length += 16 * $this->random_int($modulus = 16);
@@ -102,7 +107,7 @@ class WriteLoop extends ResumableSignalLoop
                 $pad = $this->random($pad_length);
                 $buffer = yield $connection->stream->getWriteBuffer(8 + 8 + 4 + $pad_length + $length);
 
-                yield $buffer->bufferWrite("\0\0\0\0\0\0\0\0".$message_id.$this->pack_unsigned_int($length).$body.$pad);
+                yield $buffer->bufferWrite("\0\0\0\0\0\0\0\0".$message_id.$this->pack_unsigned_int($length).$message['serialized_body'].$pad);
 
                 //var_dump("plain ".bin2hex($message_id));
                 $connection->http_req_count++;
@@ -120,7 +125,7 @@ class WriteLoop extends ResumableSignalLoop
                 unset($message['send_promise']);
             }
             if ($skipped_all) {
-                break;
+                return true;
             }
         }
     }
@@ -130,6 +135,7 @@ class WriteLoop extends ResumableSignalLoop
         $API = $this->API;
         $datacenter = $this->datacenter;
         $connection = $this->connection;
+        $dc_config_number = isset($API->settings['connection_settings'][$datacenter]) ? $datacenter : 'all';
 
         do {
             if ($connection->temp_auth_key === null) {
@@ -139,8 +145,10 @@ class WriteLoop extends ResumableSignalLoop
                 return;
             }
             if (count($to_ack = $connection->ack_queue)) {
-                $connection->pending_outgoing[$connection->pending_outgoing_key++] = ['_' => 'msgs_ack', 'serialized_body' => yield $this->API->serialize_object_async(['type' => 'msgs_ack'], ['msg_ids' => $connection->ack_queue], 'msgs_ack'), 'content_related' => false, 'unencrypted' => false, 'method' => false];
-                $connection->pending_outgoing_key %= Connection::PENDING_MAX;
+                foreach (array_chunk($connection->ack_queue, 8192) as $acks) {
+                    $connection->pending_outgoing[$connection->pending_outgoing_key++] = ['_' => 'msgs_ack', 'serialized_body' => yield $this->API->serialize_object_async(['type' => 'msgs_ack'], ['msg_ids' => $acks], 'msgs_ack'), 'content_related' => false, 'unencrypted' => false, 'method' => false];
+                    $connection->pending_outgoing_key %= Connection::PENDING_MAX;
+                }
             }
 
             $has_http_wait = false;
@@ -153,20 +161,16 @@ class WriteLoop extends ResumableSignalLoop
                     break;
                 }
             }
-
             if ($API->is_http($datacenter) && !$has_http_wait) {
-                $dc_config_number = isset($API->settings['connection_settings'][$datacenter]) ? $datacenter : 'all';
-
-                //$connection->pending_outgoing[$connection->pending_outgoing_key++] = ['_' => 'http_wait', 'serialized_body' => $this->API->serialize_object(['type' => ''], ['_' => 'http_wait', 'max_wait' => $API->settings['connection_settings'][$dc_config_number]['timeout'] * 1000 - 100, 'wait_after' => 0, 'max_delay' => 0], 'http_wait'), 'content_related' => true, 'unencrypted' => false, 'method' => true];
-                $connection->pending_outgoing[$connection->pending_outgoing_key++] = ['_' => 'http_wait', 'serialized_body' => yield $this->API->serialize_object_async(['type' => ''], ['_' => 'http_wait', 'max_wait' => 30000, 'wait_after' => 0, 'max_delay' => 1], 'http_wait'), 'content_related' => true, 'unencrypted' => false, 'method' => true];
+                $connection->pending_outgoing[$connection->pending_outgoing_key++] = ['_' => 'http_wait', 'serialized_body' => yield $this->API->serialize_object_async(['type' => ''], ['_' => 'http_wait', 'max_wait' => 30000, 'wait_after' => 0, 'max_delay' => 0], 'http_wait'), 'content_related' => true, 'unencrypted' => false, 'method' => true];
                 $connection->pending_outgoing_key %= Connection::PENDING_MAX;
-
                 $has_http_wait = true;
             }
 
             $total_length = 0;
             $count = 0;
             ksort($connection->pending_outgoing);
+            $skipped = false;
             foreach ($connection->pending_outgoing as $k => $message) {
                 if ($message['unencrypted']) {
                     continue;
@@ -175,13 +179,23 @@ class WriteLoop extends ResumableSignalLoop
                     unset($connection->pending_outgoing[$k]);
                     continue;
                 }
-                $body = $message['serialized_body'];
+                if ($API->settings['connection_settings'][$dc_config_number]['pfs'] && !isset($connection->temp_auth_key['bound']) && !strpos($datacenter, 'cdn') && !in_array($message['_'], ['http_wait', 'auth.bindTempAuthKey']) && $message['method']) {
+                    $API->logger->logger("Skipping {$message['_']} due to unbound keys in DC {$datacenter}");
+                    $skipped = true;
+                    continue;
+                }
+                $body_length = strlen($message['serialized_body']);
+                $actual_length = $body_length + 32;
+                if ($total_length && $total_length + $actual_length > 32760 || $count >= 1020) {
+                    $API->logger->logger('Length overflow, postponing part of payload', \danog\MadelineProto\Logger::NOTICE);
+                    break;
+                }
 
                 $message_id = isset($message['msg_id']) ? $message['msg_id'] : $connection->generate_message_id($datacenter);
 
                 $API->logger->logger("Sending {$message['_']} as encrypted message to DC {$datacenter}", \danog\MadelineProto\Logger::ULTRA_VERBOSE);
 
-                $MTmessage = ['_' => 'MTmessage', 'msg_id' => $message_id, 'body' => $body, 'seqno' => $connection->generate_out_seq_no($message['content_related'])];
+                $MTmessage = ['_' => 'MTmessage', 'msg_id' => $message_id, 'body' => $message['serialized_body'], 'seqno' => $connection->generate_out_seq_no($message['content_related'])];
 
                 if (isset($message['method']) && $message['method'] && $message['_'] !== 'http_wait') {
                     if ((!isset($connection->temp_auth_key['connection_inited']) || $connection->temp_auth_key['connection_inited'] === false) && $message['_'] !== 'auth.bindTempAuthKey') {
@@ -220,39 +234,36 @@ class WriteLoop extends ResumableSignalLoop
                                 unset($connection->call_queue[$message['queue']][$key]);
                             }
                         }
-
+                        // TODO
                         /*                        if ($API->settings['requests']['gzip_encode_if_gt'] !== -1 && ($l = strlen($MTmessage['body'])) > $API->settings['requests']['gzip_encode_if_gt']) {
-                        if (($g = strlen($gzipped = gzencode($MTmessage['body']))) < $l) {
-                        $MTmessage['body'] = yield $API->serialize_object_async(['type' => 'gzip_packed'], ['packed_data' => $gzipped], 'gzipped data');
-                        $API->logger->logger('Using GZIP compression for ' . $message['_'] . ', saved ' . ($l - $g) . ' bytes of data, reduced call size by ' . $g * 100 / $l . '%', \danog\MadelineProto\Logger::ULTRA_VERBOSE);
-                        }
-                        unset($gzipped);
-                        }*/
+                    if (($g = strlen($gzipped = gzencode($MTmessage['body']))) < $l) {
+                    $MTmessage['body'] = yield $API->serialize_object_async(['type' => 'gzip_packed'], ['packed_data' => $gzipped], 'gzipped data');
+                    $API->logger->logger('Using GZIP compression for ' . $message['_'] . ', saved ' . ($l - $g) . ' bytes of data, reduced call size by ' . $g * 100 / $l . '%', \danog\MadelineProto\Logger::ULTRA_VERBOSE);
+                    }
+                    unset($gzipped);
+                    }*/
                     }
                 }
                 $body_length = strlen($MTmessage['body']);
-                if ($total_length && $total_length + $body_length + 32 > 655360) {
+                $actual_length = $body_length + 32;
+                if ($total_length && $total_length + $actual_length > 32760) {
                     $API->logger->logger('Length overflow, postponing part of payload', \danog\MadelineProto\Logger::NOTICE);
                     break;
                 }
                 $count++;
-                $total_length += $body_length + 32;
+                $total_length += $actual_length;
 
                 $MTmessage['bytes'] = $body_length;
                 $messages[] = $MTmessage;
                 $keys[$k] = $message_id;
-
-                if ($total_length && $total_length + 32 > 655360) {
-                    $API->logger->logger('Length overflow, postponing part of payload', \danog\MadelineProto\Logger::NOTICE);
-                    break;
-                }
             }
+            $MTmessage = null;
 
-            if (count($messages) > 1) {
-                $API->logger->logger("Wrapping in msg_container as encrypted message for DC {$datacenter}", \danog\MadelineProto\Logger::ULTRA_VERBOSE);
+            if ($count > 1) {
+                $API->logger->logger("Wrapping in msg_container ($count messages of total size $total_length) as encrypted message for DC {$datacenter}", \danog\MadelineProto\Logger::ULTRA_VERBOSE);
 
                 $message_id = $connection->generate_message_id($datacenter);
-                $connection->pending_outgoing[$connection->pending_outgoing_key] = ['_' => 'msg_container', 'container' => array_values($keys), 'content_related' => false, 'method' => false];
+                $connection->pending_outgoing[$connection->pending_outgoing_key] = ['_' => 'msg_container', 'container' => array_values($keys), 'content_related' => false, 'method' => false, 'unencrypted' => false];
 
                 //var_dumP("container ".bin2hex($message_id));
                 $keys[$connection->pending_outgoing_key++] = $message_id;
@@ -262,16 +273,16 @@ class WriteLoop extends ResumableSignalLoop
 
                 $message_data_length = strlen($message_data);
                 $seq_no = $connection->generate_out_seq_no(false);
-            } elseif (count($messages)) {
+            } elseif ($count) {
                 $message = $messages[0];
                 $message_data = $message['body'];
                 $message_data_length = $message['bytes'];
                 $message_id = $message['msg_id'];
                 $seq_no = $message['seqno'];
             } else {
-                $API->logger->logger('NO MESSAGE SENT', \danog\MadelineProto\Logger::WARNING);
+                $API->logger->logger("NO MESSAGE SENT in DC $datacenter", \danog\MadelineProto\Logger::WARNING);
 
-                return;
+                return true;
             }
 
             unset($messages);
@@ -303,12 +314,13 @@ class WriteLoop extends ResumableSignalLoop
 
             if ($has_http_wait) {
                 $connection->last_http_wait = $sent;
-            } elseif ($API->isAltervista()) {
+            } elseif (Magic::$altervista) {
                 $connection->last_http_wait = PHP_INT_MAX;
             }
 
             foreach ($keys as $key => $message_id) {
                 $connection->outgoing_messages[$message_id] = &$connection->pending_outgoing[$key];
+
                 if (isset($connection->outgoing_messages[$message_id]['promise'])) {
                     $connection->new_outgoing[$message_id] = $message_id;
                     $connection->outgoing_messages[$message_id]['sent'] = $sent;
@@ -323,8 +335,15 @@ class WriteLoop extends ResumableSignalLoop
             }
 
             //if (!empty($connection->pending_outgoing)) $connection->select();
-        } while (!empty($connection->pending_outgoing));
+        } while (!empty($connection->pending_outgoing) && !$skipped);
 
         $connection->pending_outgoing_key = 0;
+
+        return $skipped;
+    }
+
+    public function __toString(): string
+    {
+        return "write loop in DC {$this->datacenter}";
     }
 }

@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,7 +19,8 @@
 
 namespace danog\MadelineProto\Wrappers;
 
-use Amp\Deferred;
+use Amp\Promise;
+use danog\MadelineProto\Shutdown;
 
 /**
  * Manages logging in and out.
@@ -36,16 +37,32 @@ trait Loop
     public function loop_async($max_forks = 0)
     {
         if (is_callable($max_forks)) {
-            return $max_forks();
+            $this->logger->logger('Running async callable');
+
+            return yield $max_forks();
+        }
+        if ($max_forks instanceof Promise) {
+            $this->logger->logger('Resolving async promise');
+
+            return yield $max_forks;
+        }
+        if (!$this->authorized) {
+            $this->logger->logger('Not authorized, not starting event loop', \danog\MadelineProto\Logger::FATAL_ERROR);
+
+            return false;
         }
         if (in_array($this->settings['updates']['callback'], [['danog\\MadelineProto\\API', 'get_updates_update_handler'], 'get_updates_update_handler'])) {
-            return true;
+            $this->logger->logger('Getupdates event handler is enabled, exiting from loop', \danog\MadelineProto\Logger::FATAL_ERROR);
+
+            return false;
         }
+        $this->logger->logger('Starting event loop');
         if (!is_callable($this->loop_callback) || (is_array($this->loop_callback) && $this->loop_callback[1] === 'onLoop' && !method_exists(...$this->loop_callback))) {
             $this->loop_callback = null;
         }
         if (php_sapi_name() !== 'cli') {
             $needs_restart = true;
+
             try {
                 set_time_limit(-1);
             } catch (\danog\MadelineProto\Exception $e) {
@@ -53,18 +70,18 @@ trait Loop
             }
             $this->logger->logger($needs_restart ? 'Will self-restart' : 'Will not self-restart');
 
-            $backtrace = debug_backtrace(0);
-            $lockfile = dirname(end($backtrace)['file']) . '/bot.lock';
+            $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+            $lockfile = dirname(end($backtrace)['file']).'/bot'.$this->authorization['user']['id'].'.lock';
             unset($backtrace);
             $try_locking = true;
             if (!file_exists($lockfile)) {
                 touch($lockfile);
-                $lock = fopen('bot.lock', 'r+');
-            } else if (isset($GLOBALS['lock'])) {
+                $lock = fopen($lockfile, 'r+');
+            } elseif (isset($GLOBALS['lock'])) {
                 $try_locking = false;
                 $lock = $GLOBALS['lock'];
             } else {
-                $lock = fopen('bot.lock', 'r+');
+                $lock = fopen($lockfile, 'r+');
             }
             if ($try_locking) {
                 $try = 1;
@@ -72,7 +89,7 @@ trait Loop
                 while (!$locked) {
                     $locked = flock($lock, LOCK_EX | LOCK_NB);
                     if (!$locked) {
-                        $this->closeConnection("Bot is already running");
+                        $this->closeConnection('Bot is already running');
                         if ($try++ >= 30) {
                             exit;
                         }
@@ -81,17 +98,20 @@ trait Loop
                 }
             }
 
-            register_shutdown_function(function () use ($lock, $needs_restart) {
+            Shutdown::addCallback(static function () use ($lock) {
                 flock($lock, LOCK_UN);
                 fclose($lock);
-                if ($needs_restart) {
-                    $a = fsockopen((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] ? 'tls' : 'tcp') . '://' . $_SERVER['SERVER_NAME'], $_SERVER['SERVER_PORT']);
-                    fwrite($a, $_SERVER['REQUEST_METHOD'] . ' ' . $_SERVER['REQUEST_URI'] . ' ' . $_SERVER['SERVER_PROTOCOL'] . "\r\n" . 'Host: ' . $_SERVER['SERVER_NAME'] . "\r\n\r\n");
-                    $this->logger->logger("Self-restarted");
-                }
             });
+            if ($needs_restart) {
+                $logger = &$this->logger;
+                Shutdown::addCallback(static function () use (&$logger) {
+                    $a = fsockopen((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] ? 'tls' : 'tcp').'://'.$_SERVER['SERVER_NAME'], $_SERVER['SERVER_PORT']);
+                    fwrite($a, $_SERVER['REQUEST_METHOD'].' '.$_SERVER['REQUEST_URI'].' '.$_SERVER['SERVER_PROTOCOL']."\r\n".'Host: '.$_SERVER['SERVER_NAME']."\r\n\r\n");
+                    $logger->logger('Self-restarted');
+                }, 'restarter');
+            }
 
-            $this->closeConnection("Bot was started");
+            $this->closeConnection('Bot was started');
         }
         if (!$this->settings['updates']['handle_updates']) {
             $this->settings['updates']['handle_updates'] = true;
@@ -99,19 +119,20 @@ trait Loop
         if (!$this->settings['updates']['run_callback']) {
             $this->settings['updates']['run_callback'] = true;
         }
-        $this->datacenter->sockets[$this->settings['connection_settings']['default_dc']]->updater->start();
+        $this->startUpdateSystem();
 
         $this->logger->logger('Started update loop', \danog\MadelineProto\Logger::NOTICE);
-        $offset = 0;
 
         while (true) {
-            foreach ($this->updates as $update) {
+            $updates = $this->updates;
+            $this->updates = [];
+            foreach ($updates as $update) {
                 $r = $this->settings['updates']['callback']($update);
                 if (is_object($r)) {
-                    \Amp\Promise\rethrow($this->call($r));
+                    $this->callFork($r);
                 }
             }
-            $this->updates = [];
+            $updates = [];
 
             if ($this->loop_callback !== null) {
                 $callback = $this->loop_callback;
@@ -122,10 +143,10 @@ trait Loop
                     $controller->discard();
                 }
             });
-            $this->update_deferred = new Deferred();
-            yield $this->update_deferred->promise();
+            yield $this->waitUpdate();
         }
     }
+
     public function closeConnection($message = 'OK!')
     {
         if (php_sapi_name() === 'cli' || isset($GLOBALS['exited']) || headers_sent()) {
@@ -136,7 +157,7 @@ trait Loop
         header('Connection: close');
         ignore_user_abort(true);
         ob_start();
-        echo '<html><body><h1>' . $message . '</h1></body</html>';
+        echo '<html><body><h1>'.$message.'</h1></body</html>';
         $size = ob_get_length();
         header("Content-Length: $size");
         header('Content-Type: text/html');

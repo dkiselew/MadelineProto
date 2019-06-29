@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -39,14 +39,15 @@ class RPCErrorException extends \Exception
 
     public function __toString()
     {
-        $result = sprintf(\danog\MadelineProto\Lang::$current_lang['rpc_tg_error'], $this->getMess(), $this->rpc, $this->file, $this->line.PHP_EOL.PHP_EOL).PHP_EOL.\danog\MadelineProto\Magic::$revision.PHP_EOL.$this->getTLTrace().PHP_EOL;
+        $result = sprintf(\danog\MadelineProto\Lang::$current_lang['rpc_tg_error'], $this->getMess()." ({$this->code})", $this->rpc, $this->file, $this->line.PHP_EOL, \danog\MadelineProto\Magic::$revision.PHP_EOL.PHP_EOL).PHP_EOL.$this->getTLTrace().PHP_EOL;
         if (php_sapi_name() !== 'cli') {
             $result = str_replace(PHP_EOL, '<br>'.PHP_EOL, $result);
         }
+
         return $result;
     }
 
-    public function __construct($message = null, $code = 0, Exception $previous = null)
+    public function __construct($message = null, $code = 0, $caller = '', Exception $previous = null)
     {
         $this->rpc = $message;
         switch ($message) {
@@ -177,7 +178,7 @@ class RPCErrorException extends \Exception
                 break;
         }
         parent::__construct($message, $code, $previous);
-        $this->prettify_tl();
+        $this->prettify_tl($caller);
         $additional = [];
         foreach ($this->getTrace() as $level) {
             if (isset($level['function']) && $level['function'] === 'method_call') {
@@ -190,7 +191,7 @@ class RPCErrorException extends \Exception
         if ($this->rpc !== $message) {
             $this->fetched = true;
         }
-        if (!self::$rollbar) {
+        if (!self::$rollbar || !class_exists('\\Rollbar\\Rollbar')) {
             return;
         }
         if (in_array($this->rpc, ['CHANNEL_PRIVATE', -404, -429, 'USERNAME_NOT_OCCUPIED', 'ACCESS_TOKEN_INVALID', 'AUTH_KEY_UNREGISTERED', 'SESSION_PASSWORD_NEEDED', 'PHONE_NUMBER_UNOCCUPIED', 'PEER_ID_INVALID', 'CHAT_ID_INVALID', 'USERNAME_INVALID', 'CHAT_WRITE_FORBIDDEN', 'CHAT_ADMIN_REQUIRED', 'PEER_FLOOD'])) {

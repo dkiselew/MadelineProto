@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -24,7 +24,6 @@ use danog\MadelineProto\Stream\Async\BufferedStream;
 use danog\MadelineProto\Stream\BufferedProxyStreamInterface;
 use danog\MadelineProto\Stream\ConnectionContext;
 use danog\MadelineProto\Stream\MTProtoBufferInterface;
-use danog\MadelineProto\Tools;
 
 /**
  * HTTP stream wrapper.
@@ -34,7 +33,6 @@ use danog\MadelineProto\Tools;
 class HttpStream implements MTProtoBufferInterface, BufferedProxyStreamInterface
 {
     use BufferedStream;
-    use Tools;
     private $stream;
     private $code;
     private $ctx;
@@ -180,6 +178,16 @@ class HttpStream implements MTProtoBufferInterface, BufferedProxyStreamInterface
     public function bufferRead(int $length): Promise
     {
         return new Success($this->code);
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return \Amp\Socket\Socket
+     */
+    public function getSocket(): \Amp\Socket\Socket
+    {
+        return $this->stream->getSocket();
     }
 
     public static function getName(): string

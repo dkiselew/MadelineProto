@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,13 +19,9 @@
 
 namespace danog\MadelineProto\MTProtoTools;
 
-use Amp\Deferred;
-use Amp\Promise;
-use Amp\Success;
 use danog\MadelineProto\Exception;
 use danog\MadelineProto\TL\TLCallback;
 use danog\MadelineProto\Tools;
-use function Amp\call;
 
 /**
  * Manages upload and download of files.
@@ -37,9 +33,9 @@ class ReferenceDatabase implements TLCallback
     const DOCUMENT_LOCATION = 0;
     // Reference from a photo
     const PHOTO_LOCATION = 1;
-    // Reference from a location (can only be photo location)
+    // Reference from a photo location (can only be photo location)
     const PHOTO_LOCATION_LOCATION = 2;
-    // Reference from a location (can only be document location)
+    // DEPRECATED: Reference from a location (can only be document location)
     const DOCUMENT_LOCATION_LOCATION = 0;
 
     // Peer + photo ID
@@ -62,8 +58,9 @@ class ReferenceDatabase implements TLCallback
     const WALLPAPER_ORIGIN = 9;
 
     const LOCATION_CONTEXT = [
-        'inputFileLocation'         => self::PHOTO_LOCATION_LOCATION,
-        'inputDocumentFileLocation' => self::DOCUMENT_LOCATION_LOCATION,
+        //'inputFileLocation'         => self::PHOTO_LOCATION_LOCATION, // DEPRECATED
+        'inputDocumentFileLocation' => self::DOCUMENT_LOCATION,
+        'inputPhotoFileLocation'    => self::PHOTO_LOCATION,
         'inputPhoto'                => self::PHOTO_LOCATION,
         'inputDocument'             => self::DOCUMENT_LOCATION,
     ];
@@ -85,7 +82,6 @@ class ReferenceDatabase implements TLCallback
         'updateUserPhoto' => self::USER_PHOTO_ORIGIN,
         'user'            => self::USER_PHOTO_ORIGIN,
         'userFull'        => self::USER_PHOTO_ORIGIN,
-
 
         'wallPaper' => self::WALLPAPER_ORIGIN,
 
@@ -127,6 +123,11 @@ class ReferenceDatabase implements TLCallback
 
     public function init()
     {
+        foreach ($this->db as $key => $value) {
+            if ($key[0] === "0") { // Unsetting deprecated DOCUMENT_LOCATION_LOCATION
+                unset($this->db[$key]);
+            }
+        }
     }
 
     public function getMethodCallbacks(): array
@@ -155,7 +156,7 @@ class ReferenceDatabase implements TLCallback
 
     public function getConstructorSerializeCallbacks(): array
     {
-        return array_fill_keys(array_keys(self::LOCATION_CONTEXT), [$this, 'populateReferenceSync']);
+        return array_fill_keys(array_keys(self::LOCATION_CONTEXT), [$this, 'populateReference']);
     }
 
     public function getTypeMismatchCallbacks(): array
@@ -215,6 +216,7 @@ class ReferenceDatabase implements TLCallback
         }
         if (!isset($location['file_reference'])) {
             $this->API->logger->logger("Object {$location['_']} does not have reference", \danog\MadelineProto\Logger::ERROR);
+
             return false;
         }
         $key = count($this->cacheContexts) - 1;
@@ -455,24 +457,19 @@ class ReferenceDatabase implements TLCallback
         }
     }
 
-    public function refreshReference(int $locationType, array $location): Promise
+    public function refreshReference(int $locationType, array $location)
     {
         return $this->refreshReferenceInternal($this->serializeLocation($locationType, $location));
     }
 
-    public function refreshReferenceInternal(string $location): Promise
+    public function refreshReferenceInternal(string $location)
     {
         if (isset($this->refreshed[$location])) {
             $this->API->logger->logger('Reference already refreshed!', \danog\MadelineProto\Logger::VERBOSE);
 
-            return new Success($this->db[$location]['reference']);
+            return $this->db[$location]['reference'];
         }
 
-        return call([$this, 'refreshReferenceInternalGenerator'], $location);
-    }
-
-    public function refreshReferenceInternalGenerator(string $location): \Generator
-    {
         ksort($this->db[$location]['origins']);
         $count = 0;
 
@@ -497,7 +494,6 @@ class ReferenceDatabase implements TLCallback
                         $this->API->full_chats[$origin['peer']]['last_update'] = 0;
                     }
                     $this->API->get_full_info($origin['peer']);
-                    yield new Success(0);
                     break;
                 // Peer (default photo ID)
                 case self::USER_PHOTO_ORIGIN:
@@ -532,33 +528,27 @@ class ReferenceDatabase implements TLCallback
         throw new Exception('Did not refresh reference');
     }
 
-    public function populateReferenceSync(array $object): array
+    public function populateReference(array $object)
     {
-        return $this->wait($this->populateReference($object));
+        $object['file_reference'] = yield $this->getReference(self::LOCATION_CONTEXT[$object['_']], $object);
+
+        return $object;
     }
 
-    public function populateReference(array $object): Promise
-    {
-        $deferred = new Deferred();
-        $this->getReference(self::LOCATION_CONTEXT[$object['_']], $object)->onResolve(function ($e, $res) use ($deferred, $object) {
-            if ($e) {
-                throw $e;
-            }
-            $object['file_reference'] = $res;
-            $deferred->resolve($object);
-        });
-
-        return $deferred->promise();
-    }
-
-    public function getReference(int $locationType, array $location): Promise
+    public function getReference(int $locationType, array $location)
     {
         $locationString = $this->serializeLocation($locationType, $location);
         if (!isset($this->db[$locationString]['reference'])) {
             if (isset($location['file_reference'])) {
                 $this->API->logger->logger("Using outdated file reference for location of type $locationType object {$location['_']}", \danog\MadelineProto\Logger::ULTRA_VERBOSE);
 
-                return new Success($location['file_reference']);
+                return $location['file_reference'];
+            }
+
+            if (!$this->refresh) {
+                $this->API->logger->logger("Using null file reference for location of type $locationType object {$location['_']}", \danog\MadelineProto\Logger::ULTRA_VERBOSE);
+
+                return '';
             }
 
             throw new \danog\MadelineProto\Exception("Could not find file reference for location of type $locationType object {$location['_']}");
@@ -569,14 +559,13 @@ class ReferenceDatabase implements TLCallback
             return $this->refreshReferenceInternal($locationString);
         }
 
-        return new Success($this->db[$locationString]['reference']);
+        return $this->db[$locationString]['reference'];
     }
 
     private function serializeLocation(int $locationType, array $location)
     {
         switch ($locationType) {
             case self::DOCUMENT_LOCATION:
-            case self::DOCUMENT_LOCATION_LOCATION:
             case self::PHOTO_LOCATION:
                 return $locationType.(is_int($location['id']) ? $this->pack_signed_long($location['id']) : $location['id']);
             case self::PHOTO_LOCATION_LOCATION:

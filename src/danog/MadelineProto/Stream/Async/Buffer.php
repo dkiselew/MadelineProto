@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,7 +19,6 @@
 namespace danog\MadelineProto\Stream\Async;
 
 use Amp\Promise;
-use function Amp\call;
 
 /**
  * Buffer helper trait.
@@ -32,11 +31,11 @@ trait Buffer
 {
     public function bufferRead(int $length): Promise
     {
-        return call([$this, 'bufferReadAsync'], $length);
+        return $this->call($this->bufferReadAsync($length));
     }
 
     public function bufferWrite(string $data): Promise
     {
-        return call([$this, 'bufferWriteAsync'], $data);
+        return $this->call($this->bufferWriteAsync($data));
     }
 }

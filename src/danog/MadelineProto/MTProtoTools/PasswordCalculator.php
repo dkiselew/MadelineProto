@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -38,11 +38,10 @@ class PasswordCalculator
     private $srp_B;
     private $srp_BForHash;
     private $srp_id;
+    public $logger;
 
-    public function __construct($logger)
-    {
-        $this->logger = $logger;
-    }
+    // This is needed do not remove this
+    public function __construct($logger) { $this->logger = $logger; }
 
     public function addInfo(array $object)
     {

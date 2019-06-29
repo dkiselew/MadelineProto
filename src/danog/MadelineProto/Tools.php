@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,17 +19,26 @@
 namespace danog\MadelineProto;
 
 use Amp\Deferred;
+use Amp\Failure;
 use Amp\Loop;
 use Amp\Promise;
 use Amp\Success;
+use function Amp\Promise\all;
+use function Amp\Promise\any;
+use function Amp\Promise\first;
+use function Amp\Promise\some;
+use function Amp\Promise\timeout;
 use function Amp\Promise\wait;
+use function Amp\ByteStream\getStdin;
+use function Amp\ByteStream\getStdout;
+use function Amp\ByteStream\getOutputBufferStream;
 
 /**
  * Some tools.
  */
 trait Tools
 {
-    public function gen_vector_hash($ints)
+    public static function gen_vector_hash($ints)
     {
         //sort($ints, SORT_NUMERIC);
         if (\danog\MadelineProto\Magic::$bigint) {
@@ -37,7 +46,7 @@ trait Tools
             foreach ($ints as $int) {
                 $hash = $hash->multiply(\danog\MadelineProto\Magic::$twozerotwosixone)->add(\danog\MadelineProto\Magic::$zeroeight)->add(new \phpseclib\Math\BigInteger($int))->divide(\danog\MadelineProto\Magic::$zeroeight)[1];
             }
-            $hash = $this->unpack_signed_int(strrev(str_pad($hash->toBytes(), 4, "\0", STR_PAD_LEFT)));
+            $hash = self::unpack_signed_int(strrev(str_pad($hash->toBytes(), 4, "\0", STR_PAD_LEFT)));
         } else {
             $hash = 0;
             foreach ($ints as $int) {
@@ -48,7 +57,7 @@ trait Tools
         return $hash;
     }
 
-    public function random_int($modulus = false)
+    public static function random_int($modulus = false)
     {
         if ($modulus === false) {
             $modulus = PHP_INT_MAX;
@@ -68,15 +77,15 @@ trait Tools
         }
 
         if (Magic::$bigint) {
-            $number = $this->unpack_signed_int($this->random(4));
+            $number = self::unpack_signed_int(self::random(4));
         } else {
-            $number = $this->unpack_signed_long($this->random(8));
+            $number = self::unpack_signed_long(self::random(8));
         }
 
         return ($number & PHP_INT_MAX) % $modulus;
     }
 
-    public function random($length)
+    public static function random($length)
     {
         return $length === 0 ? '' : \phpseclib\Crypt\Random::string($length);
     }
@@ -85,31 +94,14 @@ trait Tools
      * posmod(numeric,numeric) : numeric
      * Works just like the % (modulus) operator, only returns always a postive number.
      */
-    public function posmod($a, $b)
+    public static function posmod($a, $b)
     {
         $resto = $a % $b;
 
         return $resto < 0 ? $resto + abs($b) : $resto;
     }
 
-    public function array_cast_recursive($array, $force = false)
-    {
-        if (!\danog\MadelineProto\Magic::$has_thread && !$force) {
-            return $array;
-        }
-        if (is_array($array)) {
-            if (!is_array($array)) {
-                $array = (array) $array;
-            }
-            foreach ($array as $key => $value) {
-                $array[$key] = $this->array_cast_recursive($value, $force);
-            }
-        }
-
-        return $array;
-    }
-
-    public function unpack_signed_int($value)
+    public static function unpack_signed_int($value)
     {
         if (strlen($value) !== 4) {
             throw new TL\Exception(\danog\MadelineProto\Lang::$current_lang['length_not_4']);
@@ -118,7 +110,7 @@ trait Tools
         return unpack('l', \danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev($value) : $value)[1];
     }
 
-    public function unpack_signed_long($value)
+    public static function unpack_signed_long($value)
     {
         if (strlen($value) !== 8) {
             throw new TL\Exception(\danog\MadelineProto\Lang::$current_lang['length_not_8']);
@@ -127,7 +119,7 @@ trait Tools
         return unpack('q', \danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev($value) : $value)[1];
     }
 
-    public function pack_signed_int($value)
+    public static function pack_signed_int($value)
     {
         if ($value > 2147483647) {
             throw new TL\Exception(sprintf(\danog\MadelineProto\Lang::$current_lang['value_bigger_than_2147483647'], $value));
@@ -140,7 +132,7 @@ trait Tools
         return \danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev($res) : $res;
     }
 
-    public function pack_signed_long($value)
+    public static function pack_signed_long($value)
     {
         if ($value > 9223372036854775807) {
             throw new TL\Exception(sprintf(\danog\MadelineProto\Lang::$current_lang['value_bigger_than_9223372036854775807'], $value));
@@ -148,12 +140,12 @@ trait Tools
         if ($value < -9.223372036854776E+18) {
             throw new TL\Exception(sprintf(\danog\MadelineProto\Lang::$current_lang['value_smaller_than_9223372036854775808'], $value));
         }
-        $res = \danog\MadelineProto\Magic::$bigint ? $this->pack_signed_int($value)."\0\0\0\0" : (\danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev(pack('q', $value)) : pack('q', $value));
+        $res = \danog\MadelineProto\Magic::$bigint ? self::pack_signed_int($value)."\0\0\0\0" : (\danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev(pack('q', $value)) : pack('q', $value));
 
         return $res;
     }
 
-    public function pack_unsigned_int($value)
+    public static function pack_unsigned_int($value)
     {
         if ($value > 4294967295) {
             throw new TL\Exception(sprintf(\danog\MadelineProto\Lang::$current_lang['value_bigger_than_4294967296'], $value));
@@ -165,7 +157,7 @@ trait Tools
         return pack('V', $value);
     }
 
-    public function pack_double($value)
+    public static function pack_double($value)
     {
         $res = pack('d', $value);
         if (strlen($res) !== 8) {
@@ -175,7 +167,7 @@ trait Tools
         return \danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev($res) : $res;
     }
 
-    public function unpack_double($value)
+    public static function unpack_double($value)
     {
         if (strlen($value) !== 8) {
             throw new TL\Exception(\danog\MadelineProto\Lang::$current_lang['length_not_8']);
@@ -184,33 +176,81 @@ trait Tools
         return unpack('d', \danog\MadelineProto\Magic::$BIG_ENDIAN ? strrev($value) : $value)[1];
     }
 
-    public function infloop()
-    {
-        while (true) {
-            Loop::loop();
-        }
-    }
-
-    public function wait($promise)
+    public static function wait($promise)
     {
         if ($promise instanceof \Generator) {
             $promise = new Coroutine($promise);
         } elseif (!($promise instanceof Promise)) {
             return $promise;
         }
+
+        $exception = null;
+        $value = null;
+        $resolved = false;
         do {
             try {
-                return wait($promise);
-            } catch (\Throwable $e) {
-                if ($e->getMessage() !== 'Loop stopped without resolving the promise') {
-                    //$this->logger->logger("AN EXCEPTION SURFACED " . $e, \danog\MadelineProto\Logger::ERROR);
-                    throw $e;
-                }
+                Loop::run(function () use (&$resolved, &$value, &$exception, $promise) {
+                    $promise->onResolve(function ($e, $v) use (&$resolved, &$value, &$exception) {
+                        Loop::stop();
+                        $resolved = true;
+                        $exception = $e;
+                        $value = $v;
+                    });
+                });
+            } catch (\Throwable $throwable) {
+                throw new \Error('Loop exceptionally stopped without resolving the promise', 0, $throwable);
             }
-        } while (true);
+        } while (!$resolved);
+
+        if ($exception) {
+            throw $exception;
+        }
+
+        return $value;
     }
 
-    public function call($promise)
+    public static function all($promises)
+    {
+        foreach ($promises as &$promise) {
+            $promise = self::call($promise);
+        }
+
+        return all($promises);
+    }
+
+    public static function any($promises)
+    {
+        foreach ($promises as &$promise) {
+            $promise = self::call($promise);
+        }
+
+        return any($promises);
+    }
+
+    public static function some($promises)
+    {
+        foreach ($promises as &$promise) {
+            $promise = self::call($promise);
+        }
+
+        return some($promises);
+    }
+
+    public static function first($promises)
+    {
+        foreach ($promises as &$promise) {
+            $promise = self::call($promise);
+        }
+
+        return first($promises);
+    }
+
+    public static function timeout($promise, $timeout)
+    {
+        return timeout(self::call($promise), $timeout);
+    }
+
+    public static function call($promise)
     {
         if ($promise instanceof \Generator) {
             $promise = new Coroutine($promise);
@@ -221,18 +261,82 @@ trait Tools
         return $promise;
     }
 
-    public function after($a, $b)
+    public static function callFork($promise, $actual = null, $file = '')
     {
-        $a = $this->call($a);
-        $deferred = new Deferred();
-        $a->onResolve(function ($e, $res) use ($b, $deferred) {
-            if ($e) {
-                throw $e;
+        if ($actual) {
+            $promise = $actual;
+        } else {
+            $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0];
+            $file = '';
+            if (isset($trace['file'])) {
+                $file .= basename($trace['file'], '.php');
             }
-            $b = $this->call($b());
+            if (isset($trace['line'])) {
+                $file .= ":{$trace['line']}";
+            }
+        }
+        if ($promise instanceof \Generator) {
+            $promise = new Coroutine($promise);
+        }
+        if ($promise instanceof Promise) {
+            $promise->onResolve(function ($e, $res) use ($file) {
+                if ($e) {
+                    if (isset($this)) {
+                        $this->rethrow($e, $file);
+                    } else {
+                        self::rethrow($e, $file);
+                    }
+                }
+            });
+        }
+
+        return $promise;
+    }
+
+    public static function callForkDefer($promise)
+    {
+        Loop::defer([__CLASS__, 'callFork'], $promise);
+    }
+
+    public static function rethrow($e, $file = '')
+    {
+        $zis = isset($this) ? $this : null;
+        $logger = isset($zis->logger) ? $zis->logger : Logger::$default;
+        if ($file) {
+            $file = " started @ $file";
+        }
+        if ($logger) $logger->logger("Got the following exception within a forked strand$file, trying to rethrow");
+        if ($e->getMessage() === "Cannot get return value of a generator that hasn't returned") {
+            $logger->logger("Well you know, this might actually not be the actual exception, scroll up in the logs to see the actual exception");
+            if (!$zis || !$zis->destructing) Promise\rethrow(new Failure($e));
+        } else {
+            if ($logger) $logger->logger($e);
+            Promise\rethrow(new Failure($e));
+        }
+    }
+
+    public static function after($a, $b)
+    {
+        $a = self::call($a());
+        $deferred = new Deferred();
+        $a->onResolve(static function ($e, $res) use ($b, $deferred) {
+            if ($e) {
+                if (isset($this)) {
+                    $this->rethrow($e, $file);
+                } else {
+                    self::rethrow($e, $file);
+                }
+                return;
+            }
+            $b = self::call($b());
             $b->onResolve(static function ($e, $res) use ($deferred) {
                 if ($e) {
-                    throw $e;
+                    if (isset($this)) {
+                        $this->rethrow($e, $file);
+                    } else {
+                        self::rethrow($e, $file);
+                    }
+                    return;
                 }
                 $deferred->resolve($res);
             });
@@ -241,8 +345,39 @@ trait Tools
         return $deferred->promise();
     }
 
-    public function sleep_async($time)
+    public static function sleep($time)
     {
         return new \Amp\Delayed($time * 1000);
+    }
+    public static function readLine($prompt = '')
+    {
+        return self::call(Tools::readLineAsync($prompt));
+    }
+    public static function readLineAsync($prompt = '')
+    {
+        $stdin = getStdin();
+        $stdout = getStdout();
+        if ($prompt) {
+            yield $stdout->write($prompt);
+        }
+        static $lines = [''];
+        while (count($lines) < 2 && ($chunk = yield $stdin->read()) !== null) {
+            $chunk = explode("\n", str_replace(["\r", "\n\n"], "\n", $chunk));
+            $lines[count($lines) - 1] .= array_shift($chunk);
+            $lines = array_merge($lines, $chunk);
+        }
+        return array_shift($lines);
+    }
+
+    public static function echo($string)
+    {
+        return getOutputBufferStream()->write($string);
+    }
+    public static function is_array_or_alike($var)
+    {
+        return is_array($var) ||
+            ($var instanceof ArrayAccess &&
+            $var instanceof Traversable &&
+            $var instanceof Countable);
     }
 }

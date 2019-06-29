@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -44,7 +44,7 @@ trait TD
         return $params;
     }
 
-    public function td_to_mtproto($params)
+    public function td_to_mtproto_async($params)
     {
         $newparams = ['_' => self::REVERSE[$params['_']]];
         foreach (self::TD_PARAMS_CONVERSION[$newparams['_']] as $td => $mtproto) {
@@ -66,7 +66,7 @@ trait TD
                     default:
                         $newparams[$mtproto[0]] = isset($params[$td]) ? $params[$td] : null;
                         if (is_array($newparams[$mtproto[0]])) {
-                            $newparams[$mtproto[0]] = $this->mtproto_to_td($newparams[$mtproto[0]]);
+                            $newparams[$mtproto[0]] = yield $this->mtproto_to_td_async($newparams[$mtproto[0]]);
                         }
                 }
             }
@@ -75,12 +75,12 @@ trait TD
         return $newparams;
     }
 
-    public function mtproto_to_tdcli($params)
+    public function mtproto_to_tdcli_async($params)
     {
-        return $this->td_to_tdcli($this->mtproto_to_td($params));
+        return $this->td_to_tdcli(yield $this->mtproto_to_td_async($params));
     }
 
-    public function mtproto_to_td(&$params)
+    public function mtproto_to_td_async(&$params)
     {
         if (!is_array($params)) {
             return $params;
@@ -100,7 +100,7 @@ trait TD
             } else {
                 switch (end($mtproto)) {
                     case 'choose_chat_id_from_botapi':
-                        $newparams[$td] = $this->get_info($params[$mtproto[0]])['bot_api_id'] == $this->authorization['user']['id'] ? $params['from_id'] : $this->get_info($params[$mtproto[0]])['bot_api_id'];
+                        $newparams[$td] = (yield $this->get_info_async($params[$mtproto[0]]))['bot_api_id'] == $this->authorization['user']['id'] ? $params['from_id'] : yield $this->get_info_async($params[$mtproto[0]])['bot_api_id'];
                         break;
                     case 'choose_incoming_or_sent':
                         $newparams[$td] = ['_' => $params['out'] ? 'messageIsSuccessfullySent' : 'messageIsIncoming'];
@@ -138,7 +138,7 @@ trait TD
                         if ($params['message'] !== '') {
                             $newparams[$td] = ['_' => 'messageText', 'text' => $params['message']];
                             if (isset($params['media']['_']) && $params['media']['_'] === 'messageMediaWebPage') {
-                                $newparams[$td]['web_page'] = $this->mtproto_to_td($params['media']['webpage']);
+                                $newparams[$td]['web_page'] = yield $this->mtproto_to_td_async($params['media']['webpage']);
                             }
                             if (isset($params['entities'])) {
                                 $newparams[$td]['entities'] = $params['entities'];
@@ -154,7 +154,7 @@ trait TD
                             $newparams[$td] = isset($params[$mtproto[0]]) ? $params[$mtproto[0]] : null;
                         }
                         if (is_array($newparams[$td])) {
-                            $newparams[$td] = $this->mtproto_to_td($newparams[$td]);
+                            $newparams[$td] = yield $this->mtproto_to_td_async($newparams[$td]);
                         }
                 }
             }

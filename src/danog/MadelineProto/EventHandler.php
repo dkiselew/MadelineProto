@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -24,50 +24,10 @@ class EventHandler extends APIFactory
     public function __construct($MadelineProto)
     {
         $this->API = $MadelineProto->API;
-        $this->async = $MadelineProto->async;
-        $this->methods = $MadelineProto->methods;
+        $this->async = &$MadelineProto->async;
+        $this->methods = &$MadelineProto->methods;
         foreach ($this->API->get_method_namespaces() as $namespace) {
-            $this->{$namespace} = new APIFactory($namespace, $this->API);
-            $this->{$namespace}->async = $MadelineProto->async;
+            $this->{$namespace} = new APIFactory($namespace, $this->API, $this->async);
         }
-    }
-
-    public function &__get($name)
-    {
-        if ($name === 'settings') {
-            $this->API->setdem = true;
-
-            return $this->API->settings;
-        }
-
-        return $this->API->storage[$name];
-    }
-
-    public function __set($name, $value)
-    {
-        if ($name === 'settings') {
-            if (Magic::is_fork() && !Magic::$processed_fork) {
-                \danog\MadelineProto\Logger::log('Detected fork');
-                $this->API->reset_session();
-                foreach ($this->API->datacenter->sockets as $id => $datacenter) {
-                    $this->API->close_and_reopen($id);
-                }
-                Magic::$processed_fork = true;
-            }
-
-            return $this->API->__construct(array_replace_recursive($this->API->settings, $value));
-        }
-
-        return $this->API->storage[$name] = $value;
-    }
-
-    public function __isset($name)
-    {
-        return isset($this->API->storage[$name]);
-    }
-
-    public function __unset($name)
-    {
-        unset($this->API->storage[$name]);
     }
 }

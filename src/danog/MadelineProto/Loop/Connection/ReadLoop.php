@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -18,15 +18,15 @@
 
 namespace danog\MadelineProto\Loop\Connection;
 
+use Amp\ByteStream\PendingReadError;
+use Amp\ByteStream\StreamException;
 use Amp\Loop;
-use Amp\Promise;
 use Amp\Websocket\ClosedException;
 use danog\MadelineProto\Logger;
 use danog\MadelineProto\Loop\Impl\SignalLoop;
 use danog\MadelineProto\MTProtoTools\Crypt;
 use danog\MadelineProto\NothingInTheSocketException;
 use danog\MadelineProto\Tools;
-use function Amp\call;
 
 /**
  * Socket read loop.
@@ -38,38 +38,38 @@ class ReadLoop extends SignalLoop
     use Tools;
     use Crypt;
 
-    public function loop(): \Generator
+    protected $connection;
+    protected $datacenter;
+
+    public function __construct($API, $datacenter)
+    {
+        $this->API = $API;
+        $this->datacenter = $datacenter;
+        $this->connection = $API->datacenter->sockets[$datacenter];
+    }
+
+    public function loop()
     {
         $API = $this->API;
         $datacenter = $this->datacenter;
         $connection = $this->connection;
 
-        $this->startedLoop();
-        $API->logger->logger("Entered read loop in DC {$datacenter}", Logger::ULTRA_VERBOSE);
-        $timeout = $API->settings['connection_settings'][isset($API->settings['connection_settings'][$datacenter]) ? $datacenter : 'all']['timeout'];
-
+        //$timeout = $API->settings['connection_settings'][isset($API->settings['connection_settings'][$datacenter]) ? $datacenter : 'all']['timeout'];
         while (true) {
             try {
                 $error = yield $this->waitSignal($this->readMessage());
-            } catch (NothingInTheSocketException $e) {
+            } catch (NothingInTheSocketException | StreamException | PendingReadError $e) {
                 if (isset($connection->old)) {
-                    $this->exitedLoop();
-                    $API->logger->logger("Exiting read loop in DC $datacenter");
-
                     return;
                 }
+                $API->logger->logger($e);
                 $API->logger->logger("Got nothing in the socket in DC {$datacenter}, reconnecting...", Logger::ERROR);
                 yield $connection->reconnect();
                 continue;
-            } catch (ClosedException $e) {
-                $API->logger->logger($e->getMessage(), Logger::FATAL_ERROR);
-
-                throw $e;
             }
 
             if (is_int($error)) {
                 $this->exitedLoop();
-                yield $connection->reconnect();
 
                 if ($error === -404) {
                     if ($connection->temp_auth_key !== null) {
@@ -79,15 +79,20 @@ class ReadLoop extends SignalLoop
                         foreach ($connection->new_outgoing as $message_id) {
                             $connection->outgoing_messages[$message_id]['sent'] = 0;
                         }
+                        yield $connection->reconnect();
                         yield $API->init_authorization_async();
                     } else {
-                        //throw new \danog\MadelineProto\RPCErrorException($error, $error);
+                        yield $connection->reconnect();
                     }
                 } elseif ($error === -1) {
+                    yield $connection->reconnect();
                     $API->logger->logger("WARNING: Got quick ack from DC {$datacenter}", \danog\MadelineProto\Logger::WARNING);
                 } elseif ($error === 0) {
+                    yield $connection->reconnect();
                     $API->logger->logger("Got NOOP from DC {$datacenter}", \danog\MadelineProto\Logger::WARNING);
                 } else {
+                    yield $connection->reconnect();
+
                     throw new \danog\MadelineProto\RPCErrorException($error, $error);
                 }
 
@@ -96,30 +101,24 @@ class ReadLoop extends SignalLoop
 
             $connection->http_res_count++;
 
-            try {
-                $API->handle_messages($datacenter);
-            } finally {
-                $this->exitedLoop();
-            }
-            $this->startedLoop();
-            //var_dump(count($connection->incoming_messages));
-//            Loop::defer(function () use ($datacenter) {
+            Loop::defer([$API, 'handle_messages'], $datacenter);
+
             if ($this->API->is_http($datacenter)) {
-                $this->API->datacenter->sockets[$datacenter]->waiter->resume();
-            } // });
+                Loop::defer([$connection->waiter, 'resume']);
+            }
         }
     }
 
-    public function readMessage(): Promise
-    {
-        return call([$this, 'readMessageAsync']);
-    }
-
-    public function readMessageAsync(): \Generator
+    public function readMessage()
     {
         $API = $this->API;
         $datacenter = $this->datacenter;
         $connection = $this->connection;
+        if (isset($this->connection->old)) {
+            $API->logger->logger('Not reading because connection is old');
+
+            throw new NothingInTheSocketException();
+        }
 
         try {
             $buffer = yield $connection->stream->getReadBuffer($payload_length);
@@ -142,6 +141,7 @@ class ReadLoop extends SignalLoop
             return $payload;
         }
         $auth_key_id = yield $buffer->bufferRead(8);
+
         if ($auth_key_id === "\0\0\0\0\0\0\0\0") {
             $message_id = yield $buffer->bufferRead(8);
             if (!in_array($message_id, [1, 0])) {
@@ -162,6 +162,7 @@ class ReadLoop extends SignalLoop
             $message_key = yield $buffer->bufferRead(16);
             list($aes_key, $aes_iv) = $this->aes_calculate($message_key, $connection->temp_auth_key['auth_key'], false);
             $encrypted_data = yield $buffer->bufferRead($payload_length - 24);
+
             $protocol_padding = strlen($encrypted_data) % 16;
             if ($protocol_padding) {
                 $encrypted_data = substr($encrypted_data, 0, -$protocol_padding);
@@ -204,6 +205,7 @@ class ReadLoop extends SignalLoop
             $connection->incoming_messages[$message_id] = ['seq_no' => $seq_no];
         } else {
             $API->logger->logger('Got unknown auth_key id', \danog\MadelineProto\Logger::ERROR);
+
             return -404;
         }
         $deserialized = $API->deserialize($message_data, ['type' => '', 'datacenter' => $datacenter]);
@@ -218,5 +220,10 @@ class ReadLoop extends SignalLoop
         $API->logger->logger('Received payload from DC '.$datacenter, \danog\MadelineProto\Logger::ULTRA_VERBOSE);
 
         return true;
+    }
+
+    public function __toString(): string
+    {
+        return "read loop in DC {$this->datacenter}";
     }
 }

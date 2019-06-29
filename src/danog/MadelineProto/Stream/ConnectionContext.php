@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,10 +19,9 @@
 namespace danog\MadelineProto\Stream;
 
 use Amp\CancellationToken;
-use Amp\Promise;
 use Amp\Socket\ClientConnectContext;
 use Amp\Uri\Uri;
-use function Amp\call;
+use danog\MadelineProto\Stream\Transport\DefaultStream;
 
 /**
  * Connection context class.
@@ -52,6 +51,12 @@ class ConnectionContext
      * @var \Amp\Uri\Uri
      */
     private $uri;
+    /**
+     * Whether this connection context will be used by the DNS client
+     *
+     * @var bool
+     */
+    private $isDns = false;
     /**
      * Socket context.
      *
@@ -123,7 +128,7 @@ class ConnectionContext
     public function setUri($uri): self
     {
         $this->uri = $uri instanceof Uri ? $uri : new Uri($uri);
-
+        
         return $this;
     }
 
@@ -170,7 +175,15 @@ class ConnectionContext
     {
         return $this->cancellationToken;
     }
-
+    /**
+     * Return a clone of the current connection context
+     *
+     * @return self
+     */
+    public function getCtx(): self
+    {
+        return clone $this;
+    }
     /**
      * Set the secure boolean.
      *
@@ -195,6 +208,26 @@ class ConnectionContext
         return $this->test;
     }
 
+    /**
+     * Whether this connection context will only be used by the DNS client
+     *
+     * @return bool
+     */
+    public function isDns(): bool
+    {
+        return $this->isDns;
+    }
+    /**
+     * Whether this connection context will only be used by the DNS client
+     *
+     * @param boolean $isDns
+     * @return self
+     */
+    public function setIsDns(bool $isDns): self
+    {
+        $this->isDns = $isDns;
+        return $this;
+    }
     /**
      * Set the secure boolean.
      *
@@ -286,16 +319,6 @@ class ConnectionContext
     }
 
     /**
-     * Set the ipv6 boolean.
-     *
-     * @return self
-     */
-    public function getCtx(): self
-    {
-        return clone $this;
-    }
-
-    /**
      * Add a stream to the stream chain.
      *
      * @param string $streamName
@@ -324,21 +347,11 @@ class ConnectionContext
     /**
      * Get a stream from the stream chain.
      *
-     * @return Promise
-     */
-    public function getStream(string $buffer = ''): Promise
-    {
-        return call([$this, 'getStreamAsync'], $buffer);
-    }
-
-    /**
-     * Get a stream from the stream chain.
-     *
      * @internal Generator func
      *
      * @return \Generator
      */
-    public function getStreamAsync(string $buffer = ''): \Generator
+    public function getStream(string $buffer = ''): \Generator
     {
         list($clazz, $extra) = $this->nextStreams[$this->key--];
         $obj = new $clazz();
@@ -361,6 +374,7 @@ class ConnectionContext
         if ($this->isSecure()) {
             $string .= ' (TLS)';
         }
+        $string .= $this->isTest() ? ' test' : ' main';
         $string .= ' DC ';
         $string .= $this->getDc();
         $string .= ', via ';
@@ -371,7 +385,7 @@ class ConnectionContext
                 $string .= ' => ';
             }
             $string .= preg_replace('/.*\\\\/', '', $stream[0]);
-            if ($stream[1]) {
+            if ($stream[1] && $stream[0] !== DefaultStream::getName()) {
                 $string .= ' ('.json_encode($stream[1]).')';
             }
         }

@@ -1,7 +1,7 @@
 <?php
 
 /*
-Copyright 2016-2018 Daniil Gentili
+Copyright 2016-2019 Daniil Gentili
 (https://daniil.it)
 This file is part of MadelineProto.
 MadelineProto is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -43,7 +43,7 @@ trait Extension
     public function get_extension_from_location($location, $default)
     {
         return $default;
-        $res = $this->method_call('upload.getFile', ['location' => $location, 'offset' => 0, 'limit' => 2], ['heavy' => true, 'datacenter' => $location['dc_id']]);
+        //('upload.getFile', ['location' => $location, 'offset' => 0, 'limit' => 2], ['heavy' => true, 'datacenter' => $location['dc_id']]);
         if (!isset($res['type']['_'])) {
             return $default;
         }

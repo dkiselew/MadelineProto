@@ -1,6 +1,6 @@
 <?php
 /**
- * PayloadStream.
+ * Async constructor abstract class.
  *
  * This file is part of MadelineProto.
  * MadelineProto is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -10,27 +10,50 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
  */
 
-namespace danog\MadelineProto;
+namespace danog\MadelineProto\Async;
 
-use Amp\ByteStream\InputStream;
-use Amp\Promise;
+use danog\MadelineProto\Tools;
 
 /**
- * PayloadStream.
+ * Async constructor class.
  *
- * Represents an MTProto payload
+ * Manages asynchronous construction and wakeup of classes
  *
  * @author Daniil Gentili <daniil@daniil.it>
  */
-class PayloadStream implements InputStream
+class AsyncConstruct
 {
-    public function read(): Promise
+    use Tools;
+    public $asyncInitPromise;
+
+    public function init()
     {
+        if ($this->asyncInitPromise) {
+            $this->wait($this->asyncInitPromise);
+        }
+    }
+
+    public function initAsync()
+    {
+        if ($this->asyncInitPromise) {
+            yield $this->asyncInitPromise;
+        }
+    }
+
+    public function setInitPromise($promise)
+    {
+        $this->asyncInitPromise = $this->callFork($promise);
+        $this->asyncInitPromise->onResolve(function ($error, $result) {
+            if ($error) {
+                throw $error;
+            }
+            $this->asyncInitPromise = null;
+        });
     }
 }

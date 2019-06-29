@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -35,32 +35,44 @@ abstract class Loop implements LoopInterface
 
     private $count = 0;
 
-    protected $API;
-    protected $connection;
-    protected $datacenter;
+    public $API;
 
-    public function __construct($API, $datacenter)
+    public function __construct($API)
     {
         $this->API = $API;
-        $this->datacenter = $datacenter;
-        $this->connection = $API->datacenter->sockets[$datacenter];
     }
 
     public function start()
     {
         if ($this->count) {
-            $this->API->logger->logger("NOT entering check loop in DC {$this->datacenter} with running count {$this->count}", Logger::ERROR);
+            //$this->API->logger->logger("NOT entering $this with running count {$this->count}", Logger::ERROR);
 
             return false;
         }
-        Promise\rethrow($this->call($this->loop()));
 
-        return true;
+        return $this->callFork($this->loopImpl());
+    }
+
+    private function loopImpl()
+    {
+        //yield ['my_trace' => debug_backtrace(0, 1)[0], (string) $this];
+        $this->startedLoop();
+        $this->API->logger->logger("Entered $this", Logger::ULTRA_VERBOSE);
+
+        try {
+            yield $this->loop();
+        } finally {
+            $this->exitedLoop();
+            $this->API->logger->logger("Exited $this", Logger::ULTRA_VERBOSE);
+            //return null;
+        }
     }
 
     public function exitedLoop()
     {
-        $this->count--;
+        if ($this->count) {
+            $this->count--;
+        }
     }
 
     public function startedLoop()

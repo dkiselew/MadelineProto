@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -214,7 +214,7 @@ image: https://docs.madelineproto.xyz/favicons/android-chrome-256x256.png
             $example = '';
             if (!isset($this->settings['td'])) {
                 $example .= '### Can bots use this method: **'.($bot ? 'YES' : 'NO')."**\n\n\n";
-                $example .= str_replace('[]', '', '### MadelineProto Example:
+                $example .= str_replace('[]', '', '### MadelineProto Example ([now async for huge speed and parallelism!](https://docs.madelineproto.xyz/docs/ASYNC.html)):
 
 
 ```php
@@ -228,28 +228,6 @@ $MadelineProto->start();
 
 $'.$type.' = $MadelineProto->'.$php_method.'(['.$params.']);
 ```
-
-### [PWRTelegram HTTP API](https://pwrtelegram.xyz) example (NOT FOR MadelineProto):
-
-'.($bot ? '### As a bot:
-
-POST/GET to `https://api.pwrtelegram.xyz/botTOKEN/madeline`
-
-Parameters:
-
-* method - '.$data['method'].'
-* params - `{'.$json_params.'}`
-
-' : '').'
-
-### As a user:
-
-POST/GET to `https://api.pwrtelegram.xyz/userTOKEN/'.$data['method'].'`
-
-Parameters:
-
-'.$pwr_params.'
-
 
 Or, if you\'re into Lua:
 
@@ -292,8 +270,13 @@ The following tags are currently supported:
 <strong>bold</strong>
 <em>italic</em>
 <i>italic</i>
+<u>underline</u>
+<s>strikethrough</s>
+<del>strikethrough</del>
+<strike>strikethrough</strike>
 <code>inline fixed-width code</code>
 <pre>pre-formatted fixed-width code block</pre>
+<blockquote>pre-formatted fixed-width code block</blockquote>
 <a href="https://github.com">URL</a>
 <a href="mention:@danogentili">Mention by username</a>
 <a href="mention:186785362">Mention by user id</a>
@@ -387,6 +370,8 @@ image: https://docs.madelineproto.xyz/favicons/android-chrome-256x256.png
 * [Logout](https://docs.madelineproto.xyz/logout.html)
 
 * [Login](https://docs.madelineproto.xyz/docs/LOGIN.html)
+
+* [Change 2FA password](https://docs.madelineproto.xyz/update_2fa.html)
 
 * [Get all chats, broadcast a message to all chats](https://docs.madelineproto.xyz/docs/DIALOGS.html)
 

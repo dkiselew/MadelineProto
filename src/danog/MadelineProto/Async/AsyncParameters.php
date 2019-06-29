@@ -10,15 +10,13 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
  */
 
 namespace danog\MadelineProto\Async;
-
-use Amp\Success;
 
 /**
  * Async parameters class.
@@ -53,17 +51,10 @@ class AsyncParameters extends Parameters
         return $this->refetchable;
     }
 
-    public function getParameters(): \Generator
+    public function getParameters()
     {
         $callable = $this->callable;
-        $params = $callable();
 
-        if ($params instanceof \Generator) {
-            $params = yield coroutine($params);
-        } else {
-            $params = yield new Success($params);
-        }
-
-        return $params;
+        return yield $callable();
     }
 }

@@ -1,26 +1,35 @@
 <?php
 
-if (PHP_MAJOR_VERSION === 5) {
-    if (PHP_MINOR_VERSION < 6) {
-        throw new \Exception('MadelineProto requires at least PHP 5.6 to run');
-    }
-    $newline = PHP_EOL;
-    if (php_sapi_name() !== 'cli') $newline = '<br>'.$newline;
-    echo "**********************************************************************$newline";
-    echo "**********************************************************************$newline$newline";
-    echo "YOU ARE USING AN OLD AND BUGGED VERSION OF PHP, PLEASE UPDATE TO PHP 7$newline";
-    echo "PHP 5 USERS WILL NOT RECEIVE MADELINEPROTO UPDATES AND BUGFIXES$newline$newline";
-    echo "SUPPORTED VERSIONS: PHP 7.0, 7.1, 7.2, 7.3+$newline";
-    echo "RECOMMENDED VERSION: PHP 7.3$newline$newline";
-    echo "**********************************************************************$newline";
-    echo "**********************************************************************$newline";
-    unset($newline);
-}
-
 function ___install_madeline()
 {
     if (count(debug_backtrace(0)) === 1) {
         die('You must include this file in another PHP script'.PHP_EOL);
+    }
+    $old = false;
+    if (PHP_MAJOR_VERSION === 5) {
+        if (PHP_MINOR_VERSION < 6) {
+            throw new \Exception('MadelineProto requires at least PHP 7.1 to run');
+        }
+        $old = true;
+    }
+    if (PHP_MAJOR_VERSION === 7 && PHP_MINOR_VERSION === 0) {
+        $old = true;
+    }
+    if ($old) {
+        $newline = PHP_EOL;
+        if (php_sapi_name() !== 'cli') {
+            $newline = '<br>'.$newline;
+        }
+        echo "**********************************************************************************$newline";
+        echo "**********************************************************************************$newline$newline";
+        echo "YOU ARE USING AN OLD AND BUGGED VERSION OF PHP, PLEASE UPDATE TO PHP 7.3$newline";
+        echo "PHP 5/7.0 USERS WILL NOT RECEIVE PHP UPDATES AND BUGFIXES: https://www.php.net/eol.php$newline";
+        echo "PHP 5/7.0 USERS WILL NOT RECEIVE MADELINEPROTO UPDATES AND BUGFIXES$newline$newline";
+        echo "SUPPORTED VERSIONS: PHP 7.1, 7.2, 7.3+$newline";
+        echo "RECOMMENDED VERSION: PHP 7.3$newline$newline";
+        echo "**********************************************************************************$newline";
+        echo "**********************************************************************************$newline";
+        unset($newline);
     }
 
     // MTProxy update
@@ -35,24 +44,42 @@ function ___install_madeline()
         }
     }
 
-    // MadelineProto update
+    // Template strings for madelineProto update URLs
     $release_template = 'https://phar.madelineproto.xyz/release%s?v=new';
     $phar_template = 'https://phar.madelineproto.xyz/madeline%s.phar?v=new';
 
-    $release_branch = defined('MADELINE_BRANCH') ? '-'.MADELINE_BRANCH : '-old';
-    if ($release_branch === '-') $release_branch = '';
-    $release_default = '';
-
-    if (PHP_MAJOR_VERSION === 5) {
-        $release_branch = '5'.$release_branch;
-        $release_default = '5';
+    // Version definition
+    $custom_branch = defined('MADELINE_BRANCH') ? MADELINE_BRANCH : null;
+    if ($custom_branch === '') { // If the constant is an empty string, default to the latest alpha build
+        $custom_branch = 'master';
+    } else if ($custom_branch === null) { // If the constant is not defined, default to the latest stable build
+        $custom_branch = '';
     }
 
+    $release_branch = "-$custom_branch";
+    if ($release_branch === '-') {
+        $release_branch = '';
+    }
+    $release_fallback_branch = '';
+    if (isset($_SERVER['SERVER_ADMIN']) && strpos($_SERVER['SERVER_ADMIN'], '000webhost.io') && $custom_branch === null) {
+        $release_branch = '-deprecated';
+        $release_fallback_branch = '-deprecated';
+    }
+
+    if (PHP_MAJOR_VERSION <= 5) {
+        $release_branch = '5'.$release_branch;
+        $release_fallback_branch = '5'.$release_fallback_branch;
+    } elseif (PHP_MAJOR_VERSION === 7 && PHP_MINOR_VERSION === 0) {
+        $release_branch = '70'.$release_branch;
+        $release_fallback_branch = '70'.$release_fallback_branch;
+    }
+
+    // Checking if defined branch/default branch builds can be downloaded
     if (!($release = @file_get_contents(sprintf($release_template, $release_branch)))) {
-        if (!($release = @file_get_contents(sprintf($release_template, $release_default)))) {
+        if (!($release = @file_get_contents(sprintf($release_template, $release_fallback_branch)))) {
             return;
         }
-        $release_branch = $release_default;
+        $release_branch = $release_fallback_branch;
     }
 
     if (!file_exists('madeline.phar') || !file_exists('madeline.phar.version') || file_get_contents('madeline.phar.version') !== $release) {

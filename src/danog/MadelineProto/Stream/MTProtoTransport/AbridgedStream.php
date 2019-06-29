@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -34,7 +34,6 @@ class AbridgedStream implements BufferedStreamInterface, MTProtoBufferInterface
     use BufferedStream;
 
     private $stream;
-    private $ctx;
 
     /**
      * Connect to stream.
@@ -45,7 +44,6 @@ class AbridgedStream implements BufferedStreamInterface, MTProtoBufferInterface
      */
     public function connectAsync(ConnectionContext $ctx, string $header = ''): \Generator
     {
-        $this->ctx = $ctx->getCtx();
         $this->stream = yield $ctx->getStream(chr(239).$header);
     }
 
@@ -97,6 +95,16 @@ class AbridgedStream implements BufferedStreamInterface, MTProtoBufferInterface
         $length <<= 2;
 
         return $buffer;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return \Amp\Socket\Socket
+     */
+    public function getSocket(): \Amp\Socket\Socket
+    {
+        return $this->stream->getSocket();
     }
 
     public static function getName(): string

@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -19,7 +19,6 @@
 namespace danog\MadelineProto\Async;
 
 use Amp\Promise;
-use function Amp\call;
 
 /**
  * Parameters module.
@@ -30,7 +29,6 @@ use function Amp\call;
  */
 abstract class Parameters
 {
-    private $fetched = false;
     private $params = [];
 
     /**
@@ -38,23 +36,13 @@ abstract class Parameters
      *
      * @return Promise
      */
-    public function fetchParameters(): Promise
-    {
-        return call([$this, 'fetchParametersAsync']);
-    }
-
-    /**
-     * Fetch parameters asynchronously.
-     *
-     * @return \Generator
-     */
-    public function fetchParametersAsync(): \Generator
+    public function fetchParameters()
     {
         $refetchable = $this->isRefetchable();
-        if ($this->fetched && !$refetchable) {
+        if ($this->params && !$refetchable) {
             return $this->params;
         }
-        $params = yield call([$this, 'getParameters']);
+        $params = yield $this->getParameters();
 
         if (!$refetchable) {
             $this->params = $params;
@@ -75,5 +63,5 @@ abstract class Parameters
      *
      * @return \Generator
      */
-    abstract public function getParameters(): \Generator;
+    abstract public function getParameters();
 }

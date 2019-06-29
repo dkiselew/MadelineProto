@@ -11,13 +11,16 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
  */
 
 namespace danog\MadelineProto\MTProtoTools;
+
+use danog\MadelineProto\Exception;
+use Amp\Artax\Request;
 
 /**
  * Manages the creation of the authorization key.
@@ -131,11 +134,8 @@ trait AuthKeyHandler
 
                                 if (!$pq->equals($p->multiply($q))) {
                                     $this->logger->logger('Automatic factorization failed, trying wolfram module', \danog\MadelineProto\Logger::ERROR);
-                                    if (!extension_loaded('curl')) {
-                                        throw new Exception(['extension', 'curl']);
-                                    }
 
-                                    $p = new \phpseclib\Math\BigInteger(\danog\PrimeModule::wolfram_single($pq->__toString()));
+                                    $p = new \phpseclib\Math\BigInteger(yield $this->wolfram_single_async($pq->__toString()));
                                     if (!$p->equals(\danog\MadelineProto\Magic::$zero)) {
                                         $q = $pq->divide($p)[0];
                                         if ($p->compare($q) > 0) {
@@ -462,15 +462,9 @@ trait AuthKeyHandler
         return true;
     }
 
-    public function get_dh_config()
+    public function get_dh_config_async()
     {
-        $this->updates_state['sync_loading'] = true;
-
-        try {
-            $dh_config = $this->method_call('messages.getDhConfig', ['version' => $this->dh_config['version'], 'random_length' => 0], ['datacenter' => $this->datacenter->curdc]);
-        } finally {
-            $this->updates_state['sync_loading'] = false;
-        }
+        $dh_config = yield $this->method_call_async_read('messages.getDhConfig', ['version' => $this->dh_config['version'], 'random_length' => 0], ['datacenter' => $this->datacenter->curdc]);
         if ($dh_config['_'] === 'messages.dhConfigNotModified') {
             $this->logger->logger(\danog\MadelineProto\Logger::VERBOSE, ['DH configuration not modified']);
 
@@ -504,6 +498,8 @@ trait AuthKeyHandler
                 $res = yield $this->method_call_async_read('auth.bindTempAuthKey', ['perm_auth_key_id' => $perm_auth_key_id, 'nonce' => $nonce, 'expires_at' => $expires_at, 'encrypted_message' => $encrypted_message], ['msg_id' => $message_id, 'datacenter' => $datacenter]);
                 if ($res === true) {
                     $this->logger->logger('Successfully binded temporary and permanent authorization keys, DC '.$datacenter, \danog\MadelineProto\Logger::NOTICE);
+                    $this->datacenter->sockets[$datacenter]->temp_auth_key['bound'] = true;
+                    $this->datacenter->sockets[$datacenter]->writer->resume();
 
                     return true;
                 }
@@ -519,10 +515,47 @@ trait AuthKeyHandler
         throw new \danog\MadelineProto\SecurityException('An error occurred while binding temporary and permanent authorization keys.');
     }
 
-    // Creates authorization keys
-    public function init_authorization()
+    public function wolfram_single_async($what)
     {
-        return $this->wait($this->init_authorization_async());
+        $code = yield $this->datacenter->fileGetContents('http://www.wolframalpha.com/api/v1/code');
+        $query = 'Do prime factorization of '.$what;
+        $params = [
+            'async'         => true,
+            'banners'       => 'raw',
+            'debuggingdata' => false,
+            'format'        => 'moutput',
+            'formattimeout' => 8,
+            'input'         => $query,
+            'output'        => 'JSON',
+            'proxycode'     => json_decode($code, true)['code'],
+        ];
+        $url = 'https://www.wolframalpha.com/input/json.jsp?'.http_build_query($params);
+
+        $request = (new Request($url))->withHeader('referer', 'https://www.wolframalpha.com/input/?i='.urlencode($query));
+
+        $res = json_decode(yield (yield $this->datacenter->getHTTPClient()->request($request))->getBody(), true);
+        if (!isset($res['queryresult']['pods'])) {
+            return false;
+        }
+        $fres = false;
+        foreach ($res['queryresult']['pods'] as $cur) {
+            if ($cur['id'] === 'Divisors') {
+                $fres = explode(', ', preg_replace(["/{\d+, /", "/, \d+}$/"], '', $cur['subpods'][0]['moutput']));
+                break;
+            }
+        }
+        if (is_array($fres)) {
+            $fres = $fres[0];
+
+            $newval = intval($fres);
+            if (is_int($newval)) {
+                $fres = $newval;
+            }
+
+            return $fres;
+        }
+
+        return false;
     }
 
     public function init_authorization_async()
@@ -533,8 +566,6 @@ trait AuthKeyHandler
         $initing = $this->initing_authorization;
 
         $this->initing_authorization = true;
-        $this->updates_state['sync_loading'] = true;
-        $this->postpone_updates = true;
 
         try {
             $dcs = [];
@@ -552,19 +583,22 @@ trait AuthKeyHandler
                     continue;
                 }
                 $dcs[$id] = function () use ($id, $socket) {
-                    return $this->init_authorization_socket($id, $socket);
+                    return $this->init_authorization_socket_async($id, $socket);
                 };
             }
-            yield array_shift($dcs)();
+            if ($dcs) {
+                $first = array_shift($dcs)();
+                yield $first;
+            }
+
             foreach ($dcs as $id => &$dc) {
                 $dc = $dc();
             }
-            yield $dcs;
+            yield $this->all($dcs);
 
             foreach ($postpone as $id => $socket) {
-                yield $this->init_authorization_socket($id, $socket);
+                yield $this->init_authorization_socket_async($id, $socket);
             }
-            //foreach ($dcs as $dc) { yield $dc; }
 
             if ($this->pending_auth && empty($this->init_auth_dcs)) {
                 $this->pending_auth = false;
@@ -572,14 +606,11 @@ trait AuthKeyHandler
             }
         } finally {
             $this->pending_auth = false;
-            $this->postpone_updates = false;
             $this->initing_authorization = $initing;
-            $this->updates_state['sync_loading'] = false;
-            $this->handle_pending_updates();
         }
     }
 
-    public function init_authorization_socket($id, $socket)
+    public function init_authorization_socket_async($id, $socket)
     {
         $this->init_auth_dcs[$id] = true;
 
@@ -591,8 +622,6 @@ trait AuthKeyHandler
             }
             $cdn = strpos($id, 'cdn');
             $media = strpos($id, 'media');
-
-
             if ($socket->temp_auth_key === null || $socket->auth_key === null) {
                 $dc_config_number = isset($this->settings['connection_settings'][$id]) ? $id : 'all';
                 if ($socket->auth_key === null && !$cdn && !$media) {
@@ -616,8 +645,6 @@ trait AuthKeyHandler
                         $socket->temp_auth_key = null;
                         $socket->temp_auth_key = yield $this->create_auth_key_async($this->settings['authorization']['default_temp_auth_key_expires_in'], $id);
                         yield $this->bind_temp_auth_key_async($this->settings['authorization']['default_temp_auth_key_expires_in'], $id);
-
-                        //$socket->authorized = $authorized;
 
                         $config = yield $this->method_call_async_read('help.getConfig', [], ['datacenter' => $id]);
 

@@ -34,8 +34,6 @@ use Amp\Internal;
 use Amp\Promise;
 use Amp\Success;
 
-use React\Promise\PromiseInterface as ReactPromise;
-
 /**
  * Creates a promise from a generator function yielding promises.
  *
@@ -43,7 +41,7 @@ use React\Promise\PromiseInterface as ReactPromise;
  * value is sent into the generator, while a failure reason is thrown into the generator. Using a coroutine,
  * asynchronous code can be written without callbacks and be structured like synchronous code.
  */
-final class Coroutine implements Promise
+final class Coroutine implements Promise, \ArrayAccess
 {
     use Internal\Placeholder;
     /** @var \Generator */
@@ -57,32 +55,65 @@ final class Coroutine implements Promise
     /** @var mixed Promise success value when executing next coroutine step, null at all other times. */
     private $value;
 
+    private $frames = [];
+
     /**
      * @param \Generator $generator
      */
     public function __construct(\Generator $generator)
     {
+        /*
+        $this->generator = new class($generator) {
+        private $s = '';
+        private $g;
+        private $trace;
+        public function __construct($g) {
+        $this->g = $g;
+        $this->s .= spl_object_hash($this).', ';
+        }
+        public function __call($a, $args) {
+        $this->s .= "$a, ";
+        try {
+        $res = $this->g->{$a}(...$args);
+        if (is_array($res) && isset($res['my_trace'])) {
+        $this->trace = $res;
+        $res = $this->g->{$a}(...$args);
+        }
+        return $res;
+        } catch (\Throwable $e) {
+        $this->s .= $e->getMessage();
+        $this->s .= ', ';
+        var_dump($this->s, $this->trace);
+        throw $e;
+        }
+        }
+        //public function __destruct() { var_dump($this->s); }
+        };*/
         $this->generator = $generator;
 
         try {
             $yielded = $this->generator->current();
-            if (!$yielded instanceof Promise) {
+            while (!$yielded instanceof Promise) {
                 if ($yielded instanceof \YieldReturnValue) {
                     $this->resolve($yielded->getReturn());
                     $this->generator->next();
+
                     return;
                 }
                 if (!$this->generator->valid()) {
-                    if (method_exists($this->generator, 'getReturn')) {
+                    if (PHP_MAJOR_VERSION >= 7) {
                         $this->resolve($this->generator->getReturn());
                     } else {
                         $this->resolve(null);
                     }
 
-
                     return;
                 }
-                $yielded = $this->transform($yielded);
+                if ($yielded instanceof \Generator) {
+                    $yielded = new self($yielded);
+                } else {
+                    $yielded = $this->generator->send($yielded);
+                }
             }
         } catch (\Throwable $exception) {
             $this->fail($exception);
@@ -111,7 +142,7 @@ final class Coroutine implements Promise
                         // Send the new value and execute to next yield statement.
                         $yielded = $this->generator->send($this->value);
                     }
-                    if (!$yielded instanceof Promise) {
+                    while (!$yielded instanceof Promise) {
                         if ($yielded instanceof \YieldReturnValue) {
                             $this->resolve($yielded->getReturn());
                             $this->onResolve = null;
@@ -121,7 +152,7 @@ final class Coroutine implements Promise
                         }
 
                         if (!$this->generator->valid()) {
-                            if (method_exists($this->generator, 'getReturn')) {
+                            if (PHP_MAJOR_VERSION >= 7) {
                                 $this->resolve($this->generator->getReturn());
                             } else {
                                 $this->resolve(null);
@@ -130,7 +161,11 @@ final class Coroutine implements Promise
 
                             return;
                         }
-                        $yielded = $this->transform($yielded);
+                        if ($yielded instanceof \Generator) {
+                            $yielded = new self($yielded);
+                        } else {
+                            $yielded = $this->generator->send($yielded);
+                        }
                     }
                     $this->immediate = false;
                     $yielded->onResolve($this->onResolve);
@@ -147,38 +182,28 @@ final class Coroutine implements Promise
         $yielded->onResolve($this->onResolve);
     }
 
-    /**
-     * Attempts to transform the non-promise yielded from the generator into a promise, otherwise returns an instance
-     * `Amp\Failure` failed with an instance of `Amp\InvalidYieldError`.
-     *
-     * @param mixed $yielded Non-promise yielded from generator.
-     *
-     * @return \Amp\Promise
-     */
-    private function transform($yielded): Promise
+    public function offsetExists($offset): bool
     {
-        try {
-            if (\is_array($yielded)) {
-                foreach ($yielded as &$val) {
-                    if ($val instanceof \Generator) {
-                        $val = new self($val);
-                    }
-                }
-
-                return Promise\all($yielded);
-            }
-            if ($yielded instanceof \Generator) {
-                return new self($yielded);
-            }
-
-            if ($yielded instanceof ReactPromise) {
-                return Promise\adapt($yielded);
-            }
-            // No match, continue to returning Failure below.
-        } catch (\Throwable $exception) {
-            // Conversion to promise failed, fall-through to returning Failure below.
-        }
-
-        return $yielded instanceof \Throwable || $yielded instanceof \Exception ? new Failure($yielded) : new Success($yielded);
+        throw new Exception('Not supported!');
+    }
+    public function offsetGet($offset)
+    {
+        return Tools::call((function () use ($offset) {
+            return (yield $this)[$offset];
+        })());
+    }
+    public function offsetSet($offset, $value)
+    {
+        return Tools::call((function () use ($offset, $value) {
+            $result = yield $this;
+            return $result[$offset] = $value;
+        })());
+    }
+    public function offsetUnset($offset)
+    {
+        return Tools::call((function () use ($offset) {
+            $result = yield $this;
+            unset($result[$offset]);
+        })());
     }
 }

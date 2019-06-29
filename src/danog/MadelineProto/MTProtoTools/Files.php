@@ -11,7 +11,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -23,7 +23,7 @@ use danog\MadelineProto\Async\AsyncParameters;
 use danog\MadelineProto\Exception;
 use danog\MadelineProto\Logger;
 use danog\MadelineProto\RPCErrorException;
-use function Amp\call;
+use function Amp\Promise\all;
 
 /**
  * Manages upload and download of files.
@@ -97,7 +97,10 @@ trait Files
                     static function () use ($file_id, $part_num, $part_total_num, $part_size, $f, $ctx, $ige, $seekable) {
                         if ($seekable) {
                             fseek($f, $part_num * $part_size);
+                        } elseif (ftell($f) !== $part_num * $part_size) {
+                            throw new \danog\MadelineProto\Exception('Wrong position!');
                         }
+
                         $bytes = stream_get_contents($f, $part_size);
                         if ($ige) {
                             $bytes = $ige->encrypt(str_pad($bytes, $part_size, chr(0)));
@@ -110,16 +113,16 @@ trait Files
                 ),
                 ['heavy' => true, 'file' => true, 'datacenter' => $datacenter]
             );
-            $cb(ftell($f) * 100 / $file_size);
+            $this->callFork($cb(ftell($f) * 100 / $file_size));
             $this->logger->logger('Speed for chunk: '.(($part_size * 8 / 1000000) / (microtime(true) - $t)));
             $part_num++;
             $promises[] = $read_deferred->promise();
         }
 
-        $result = yield $promises;
-        foreach ($result as $key => $result) {
+        $result = yield all($promises);
+        foreach ($result as $kkey => $result) {
             if (!$result) {
-                throw new \danog\MadelineProto\Exception('Upload of part '.$key.' failed');
+                throw new \danog\MadelineProto\Exception('Upload of part '.$kkey.' failed');
             }
         }
 
@@ -143,16 +146,33 @@ trait Files
         return $this->upload_async($file, $file_name, $cb, true);
     }
 
-    public function gen_all_file($media, $regenerate)
+    public function gen_all_file_async($media, $regenerate)
     {
         $res = [$this->constructors->find_by_predicate($media['_'])['type'] => $media];
         switch ($media['_']) {
+            case 'messageMediaPoll':
+                $res['Poll'] = $media['poll'];
+                $res['InputMedia'] = ['_' => 'inputMediaPoll', 'poll' => $res['Poll']];
+                break;
+            case 'updateMessagePoll':
+                $res['Poll'] = $media['poll'];
+                $res['InputMedia'] = ['_' => 'inputMediaPoll', 'poll' => $res['Poll']];
+                $res['MessageMedia'] = ['_' => 'messageMediaPoll', 'poll' => $res['Poll'], 'results' => $media['results']];
+                break;
             case 'messageMediaPhoto':
                 if (!isset($media['photo']['access_hash'])) {
                     throw new \danog\MadelineProto\Exception('No access hash');
                 }
                 $res['Photo'] = $media['photo'];
-                $res['InputPhoto'] = ['_' => 'inputPhoto', 'id' => $media['photo']['id'], 'access_hash' => $media['photo']['access_hash'], 'file_reference' => $this->wait($this->referenceDatabase->getReference(ReferenceDatabase::PHOTO_LOCATION, $media['photo']))];
+                $res['InputPhoto'] = [
+                    '_' => 'inputPhoto',
+                    'id' => $media['photo']['id'],
+                    'access_hash' => $media['photo']['access_hash'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::PHOTO_LOCATION,
+                        $media['photo']
+                    ),
+                ];
                 $res['InputMedia'] = ['_' => 'inputMediaPhoto', 'id' => $res['InputPhoto']];
                 if (isset($media['ttl_seconds'])) {
                     $res['InputMedia']['ttl_seconds'] = $media['ttl_seconds'];
@@ -163,17 +183,36 @@ trait Files
                     throw new \danog\MadelineProto\Exception('No access hash');
                 }
                 $res['Document'] = $media['document'];
-                $res['InputDocument'] = ['_' => 'inputDocument', 'id' => $media['document']['id'], 'access_hash' => $media['document']['access_hash'], 'file_reference' => $this->wait($this->referenceDatabase->getReference(ReferenceDatabase::DOCUMENT_LOCATION, $media['document']))];
+                $res['InputDocument'] = [
+                    '_' => 'inputDocument',
+                    'id' => $media['document']['id'],
+                    'access_hash' => $media['document']['access_hash'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::DOCUMENT_LOCATION,
+                        $media['document']
+                    ),
+                ];
                 $res['InputMedia'] = ['_' => 'inputMediaDocument', 'id' => $res['InputDocument']];
                 if (isset($media['ttl_seconds'])) {
                     $res['InputMedia']['ttl_seconds'] = $media['ttl_seconds'];
                 }
                 break;
+            case 'poll':
+                $res['InputMedia'] = ['_' => 'inputMediaPoll', 'poll' => $res['Poll']];
+                break;
             case 'document':
                 if (!isset($media['access_hash'])) {
                     throw new \danog\MadelineProto\Exception('No access hash');
                 }
-                $res['InputDocument'] = ['_' => 'inputDocument', 'id' => $media['id'], 'access_hash' => $media['access_hash'], 'file_reference' => $this->wait($this->referenceDatabase->getReference(ReferenceDatabase::DOCUMENT_LOCATION, $media))];
+                $res['InputDocument'] = [
+                    '_' => 'inputDocument',
+                    'id' => $media['id'],
+                    'access_hash' => $media['access_hash'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::DOCUMENT_LOCATION,
+                        $media
+                    ),
+                ];
                 $res['InputMedia'] = ['_' => 'inputMediaDocument', 'id' => $res['InputDocument']];
                 $res['MessageMedia'] = ['_' => 'messageMediaDocument', 'document' => $media];
                 break;
@@ -181,7 +220,15 @@ trait Files
                 if (!isset($media['access_hash'])) {
                     throw new \danog\MadelineProto\Exception('No access hash');
                 }
-                $res['InputPhoto'] = ['_' => 'inputPhoto', 'id' => $media['id'], 'access_hash' => $media['access_hash'], 'file_reference' => $this->wait($this->referenceDatabase->getReference(ReferenceDatabase::PHOTO_LOCATION, $media))];
+                $res['InputPhoto'] = [
+                    '_' => 'inputPhoto',
+                    'id' => $media['id'],
+                    'access_hash' => $media['access_hash'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::PHOTO_LOCATION,
+                        $media
+                    ),
+                ];
                 $res['InputMedia'] = ['_' => 'inputMediaPhoto', 'id' => $res['InputPhoto']];
                 $res['MessageMedia'] = ['_' => 'messageMediaPhoto', 'photo' => $media];
                 break;
@@ -192,7 +239,7 @@ trait Files
         return $res;
     }
 
-    public function get_file_info($constructor, $regenerate = false)
+    public function get_file_info_async($constructor, $regenerate = false)
     {
         if (is_string($constructor)) {
             $constructor = $this->unpack_file_id($constructor)['MessageMedia'];
@@ -208,10 +255,13 @@ trait Files
                 $constructor = $constructor['media'];
         }
 
-        return $this->gen_all_file($constructor, $regenerate);
+        return yield $this->gen_all_file_async($constructor, $regenerate);
     }
-
-    public function get_download_info($message_media)
+    public function get_propic_info_async($data)
+    {
+        return yield $this->get_download_info_async($this->chats[(yield $this->get_info_async($data))['bot_api_id']]);
+    }
+    public function get_download_info_async($message_media)
     {
         if (is_string($message_media)) {
             $message_media = $this->unpack_file_id($message_media)['MessageMedia'];
@@ -226,14 +276,14 @@ trait Files
             case 'updateNewChannelMessage':
                 $message_media = $message_media['message'];
             case 'message':
-                return $this->get_download_info($message_media['media']);
+                return yield $this->get_download_info_async($message_media['media']);
             case 'updateNewEncryptedMessage':
                 $message_media = $message_media['message'];
 
             // Secret media
             case 'encryptedMessage':
                 if ($message_media['decrypted_message']['media']['_'] === 'decryptedMessageMediaExternalDocument') {
-                    return $this->get_download_info($message_media['decrypted_message']['media']);
+                    return yield $this->get_download_info_async($message_media['decrypted_message']['media']);
                 }
                 $res['InputFileLocation'] = ['_' => 'inputEncryptedFileLocation', 'id' => $message_media['file']['id'], 'access_hash' => $message_media['file']['access_hash'], 'dc_id' => $message_media['file']['dc_id']];
                 $res['size'] = $message_media['decrypted_message']['media']['size'];
@@ -287,41 +337,83 @@ trait Files
                 return $res;
             // Wallpapers
             case 'wallPaper':
-                $photo = end($message_media['sizes']);
-
-                return array_merge($res, $this->get_download_info($photo));
+                return $this->get_download_info_async($res['document']);
             // Photos
             case 'photo':
             case 'messageMediaPhoto':
                 if ($message_media['_'] == 'photo') {
-                    $res['MessageMedia'] = ['_' => 'messageMediaPhoto', 'photo' => $message_media, 'ttl_seconds' => 0];
-                    $photo = end($message_media['sizes']);
-                } else {
-                    $res['MessageMedia'] = $message_media;
-                    $photo = end($message_media['photo']['sizes']);
+                    $message_media = ['_' => 'messageMediaPhoto', 'photo' => $message_media, 'ttl_seconds' => 0];
                 }
+                $res['MessageMedia'] = $message_media;
+                $message_media = $message_media['photo'];
+                $size = end($message_media['sizes']);
 
-                return array_merge($res, $this->get_download_info($photo));
+                $res = array_merge($res, yield $this->get_download_info_async($size));
+
+                $res['InputFileLocation'] = [
+                    '_' => 'inputPhotoFileLocation',
+                    'thumb_size' => $res['thumb_size'] ?? 'x',
+                    'dc_id' => $message_media['dc_id'],
+                    'access_hash' => $message_media['access_hash'],
+                    'id' => $message_media['id'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::PHOTO_LOCATION,
+                        $message_media
+                    ),
+                ];
+
+                return $res;
+            case 'user':
+            case 'folder':
+            case 'channel':
+            case 'chat':
+            case 'updateUserPhoto':
+                $res = yield $this->get_download_info_async($message_media['photo']);
+
+                $res['InputFileLocation'] = [
+                    '_' => 'inputPeerPhotoFileLocation',
+                    'big' => true,
+                    'dc_id' => $res['InputFileLocation']['dc_id'],
+                    'peer' => (yield $this->get_info_async($message_media))['InputPeer'],
+                    'volume_id' => $res['InputFileLocation']['volume_id'],
+                    'local_id' => $res['InputFileLocation']['local_id'],
+                    // The peer field will be added later
+                ];
+                return $res;
 
             case 'userProfilePhoto':
             case 'chatPhoto':
-                return array_merge($res, $this->get_download_info($message_media['photo_big']));
+                $size = $message_media['photo_big'];
+
+                $res = yield $this->get_download_info_async($size);
+                $res['InputFileLocation']['dc_id'] = $message_media['dc_id'];
+                return $res;
+            case 'photoStrippedSize':
+                $res['size'] = strlen($message_media['bytes']);
+                $res['data'] = $message_media['bytes'];
+                $res['thumb_size'] = 'JPG';
+                return $res;
 
             case 'photoCachedSize':
                 $res['size'] = strlen($message_media['bytes']);
                 $res['data'] = $message_media['bytes'];
+                //$res['thumb_size'] = $res['data'];
+                $res['thumb_size'] = $message_media['type'];
 
                 if ($message_media['location']['_'] === 'fileLocationUnavailable') {
                     $res['name'] = $message_media['volume_id'].'_'.$message_media['local_id'];
                     $res['mime'] = $this->get_mime_from_buffer($res['data']);
                     $res['ext'] = $this->get_extension_from_mime($res['mime']);
                 } else {
-                    $res = array_merge($res, $this->get_download_info($message_media['location']));
+                    $res = array_merge($res, yield $this->get_download_info_async($message_media['location']));
                 }
 
                 return $res;
             case 'photoSize':
-                $res = $this->get_download_info($message_media['location']);
+                $res = yield $this->get_download_info_async($message_media['location']);
+
+                $res['thumb_size'] = $message_media['type'];
+                //$res['thumb_size'] = $size;
                 if (isset($message_media['size'])) {
                     $res['size'] = $message_media['size'];
                 }
@@ -332,9 +424,30 @@ trait Files
                 throw new \danog\MadelineProto\Exception('File location unavailable');
             case 'fileLocation':
                 $res['name'] = $message_media['volume_id'].'_'.$message_media['local_id'];
-                $res['InputFileLocation'] = ['_' => 'inputFileLocation', 'volume_id' => $message_media['volume_id'], 'local_id' => $message_media['local_id'], 'secret' => $message_media['secret'], 'dc_id' => $message_media['dc_id'], 'file_reference' => $this->wait($this->referenceDatabase->getReference(ReferenceDatabase::PHOTO_LOCATION_LOCATION, $message_media))];
+                $res['InputFileLocation'] = [
+                    '_' => 'inputFileLocation',
+                    'volume_id' => $message_media['volume_id'],
+                    'local_id' => $message_media['local_id'],
+                    'secret' => $message_media['secret'],
+                    'dc_id' => $message_media['dc_id'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::PHOTO_LOCATION_LOCATION,
+                        $message_media
+                    ),
+                ];
                 $res['ext'] = $this->get_extension_from_location($res['InputFileLocation'], '.jpg');
                 $res['mime'] = $this->get_mime_from_extension($res['ext'], 'image/jpeg');
+
+                return $res;
+            case 'fileLocationToBeDeprecated':
+                $res['name'] = $message_media['volume_id'].'_'.$message_media['local_id'];
+                $res['ext'] = '.jpg';
+                $res['mime'] = $this->get_mime_from_extension($res['ext'], 'image/jpeg');
+                $res['InputFileLocation'] = [
+                    '_' => 'inputFileLocationTemp', // Will be overwritten
+                    'volume_id' => $message_media['volume_id'],
+                    'local_id' => $message_media['local_id'],
+                ];
 
                 return $res;
 
@@ -365,7 +478,19 @@ trait Files
                         $res['name'] .= ' - '.$audio['performer'];
                     }
                 }
-                $res['InputFileLocation'] = ['_' => 'inputDocumentFileLocation', 'id' => $message_media['document']['id'], 'access_hash' => $message_media['document']['access_hash'], 'version' => isset($message_media['document']['version']) ? $message_media['document']['version'] : 0, 'dc_id' => $message_media['document']['dc_id'], 'file_reference' => $this->wait($this->referenceDatabase->getReference(ReferenceDatabase::DOCUMENT_LOCATION_LOCATION, $message_media['document']))];
+
+                $res['InputFileLocation'] = [
+                    '_' => 'inputDocumentFileLocation',
+                    'id' => $message_media['document']['id'],
+                    'access_hash' => $message_media['document']['access_hash'],
+                    'version' => isset($message_media['document']['version']) ? $message_media['document']['version'] : 0,
+                    'dc_id' => $message_media['document']['dc_id'],
+                    'file_reference' => yield $this->referenceDatabase->getReference(
+                        ReferenceDatabase::DOCUMENT_LOCATION,
+                        $message_media['document']
+                    ),
+                ];
+
                 if (!isset($res['ext'])) {
                     $res['ext'] = $this->get_extension_from_location($res['InputFileLocation'], $this->get_extension_from_mime($message_media['document']['mime_type']));
                 }
@@ -384,19 +509,19 @@ trait Files
         }
     }
 
-    public function download_to_dir($message_media, $dir, $cb = null)
+    public function download_to_dir_async($message_media, $dir, $cb = null)
     {
         if (is_object($dir) && class_implements($dir)['danog\MadelineProto\FileCallbackInterface']) {
             $cb = $dir;
             $dir = $dir->getFile();
         }
 
-        $message_media = $this->get_download_info($message_media);
+        $message_media = yield $this->get_download_info_async($message_media);
 
-        return $this->download_to_file($message_media, $dir.'/'.$message_media['name'].$message_media['ext'], $cb);
+        return yield $this->download_to_file_async($message_media, $dir.'/'.$message_media['name'].$message_media['ext'], $cb);
     }
 
-    public function download_to_file($message_media, $file, $cb = null)
+    public function download_to_file_async($message_media, $file, $cb = null)
     {
         if (is_object($file) && class_implements($file)['danog\MadelineProto\FileCallbackInterface']) {
             $cb = $file;
@@ -407,14 +532,19 @@ trait Files
             touch($file);
         }
         $file = realpath($file);
-        $message_media = $this->get_download_info($message_media);
+        $message_media = yield $this->get_download_info_async($message_media);
         $stream = fopen($file, 'r+b');
         $size = fstat($stream)['size'];
         $this->logger->logger('Waiting for lock of file to download...');
-        flock($stream, LOCK_EX);
+        do {
+            $res = flock($stream, LOCK_EX|LOCK_NB);
+            if (!$res) {
+                yield $this->sleep(0.1);
+            }
+        } while (!$res);
 
         try {
-            $this->download_to_stream($message_media, $stream, $cb, $size, -1);
+            yield $this->download_to_stream_async($message_media, $stream, $cb, $size, -1);
         } finally {
             flock($stream, LOCK_UN);
             fclose($stream);
@@ -424,7 +554,7 @@ trait Files
         return $file;
     }
 
-    public function download_to_stream($message_media, $stream, $cb = null, $offset = 0, $end = -1)
+    public function download_to_stream_async($message_media, $stream, $cb = null, $offset = 0, $end = -1)
     {
         if (is_object($stream) && class_implements($stream)['danog\MadelineProto\FileCallbackInterface']) {
             $cb = $stream;
@@ -437,7 +567,7 @@ trait Files
             };
         }
 
-        $message_media = $this->get_download_info($message_media);
+        $message_media = yield $this->get_download_info_async($message_media);
 
         try {
             if (stream_get_meta_data($stream)['seekable']) {
@@ -476,12 +606,40 @@ trait Files
             }
 
             try {
-                $res = $cdn ? $this->method_call('upload.getCdnFile', ['file_token' => $message_media['file_token'], 'offset' => $offset, 'limit' => $part_size], ['heavy' => true, 'file' => true, 'datacenter' => $datacenter]) : $this->method_call('upload.getFile', ['location' => $message_media['InputFileLocation'], 'offset' => $offset, 'limit' => $part_size], ['heavy' => true, 'file' => true, 'datacenter' => &$datacenter]);
+                $res = $cdn ? 
+                            yield $this->method_call_async_read(
+                                'upload.getCdnFile', 
+                                [
+                                    'file_token' => $message_media['file_token'], 
+                                    'offset' => $offset, 
+                                    'limit' => $part_size
+                                ], 
+                                [
+                                    'heavy' => true, 
+                                    'file' => true,
+                                    'FloodWaitLimit' => 0, 
+                                    'datacenter' => $datacenter
+                                ]
+                            ) : 
+                            yield $this->method_call_async_read(
+                                'upload.getFile', 
+                                [
+                                    'location' => $message_media['InputFileLocation'], 
+                                    'offset' => $offset, 
+                                    'limit' => $part_size
+                                ], 
+                                [
+                                    'heavy' => true,
+                                    'file' => true, 
+                                    'FloodWaitLimit' => 0, 
+                                    'datacenter' => &$datacenter
+                                ]
+                            );
             } catch (\danog\MadelineProto\RPCErrorException $e) {
                 if (strpos($e->rpc, 'FLOOD_WAIT_') === 0) {
                     if (isset($message_media['MessageMedia']) && !$this->authorization['user']['bot'] && $this->settings['download']['report_broken_media']) {
                         try {
-                            $this->method_call('messages.sendMedia', ['peer' => 'support', 'media' => $message_media['MessageMedia'], 'message' => "I can't download this file, could you please help?"], ['datacenter' => $this->datacenter->curdc]);
+                            yield $this->method_call_async_read('messages.sendMedia', ['peer' => 'support', 'media' => $message_media['MessageMedia'], 'message' => "I can't download this file, could you please help?"], ['datacenter' => $this->datacenter->curdc]);
                         } catch (RPCErrorException $e) {
                             $this->logger->logger('An error occurred while reporting the broken file: '.$e->rpc, Logger::FATAL_ERROR);
                         } catch (Exception $e) {
@@ -508,17 +666,17 @@ trait Files
                 $datacenter = $res['dc_id'].'_cdn';
                 if (!isset($this->datacenter->sockets[$datacenter])) {
                     $this->config['expires'] = -1;
-                    $this->get_config([], ['datacenter' => $this->datacenter->curdc]);
+                    yield $this->get_config_async([], ['datacenter' => $this->datacenter->curdc]);
                 }
                 $this->logger->logger(\danog\MadelineProto\Lang::$current_lang['stored_on_cdn'], \danog\MadelineProto\Logger::NOTICE);
                 continue;
             }
             if ($res['_'] === 'upload.cdnFileReuploadNeeded') {
                 $this->logger->logger(\danog\MadelineProto\Lang::$current_lang['cdn_reupload'], \danog\MadelineProto\Logger::NOTICE);
-                $this->get_config([], ['datacenter' => $this->datacenter->curdc]);
+                yield $this->get_config_async([], ['datacenter' => $this->datacenter->curdc]);
 
                 try {
-                    $this->add_cdn_hashes($message_media['file_token'], $this->method_call('upload.reuploadCdnFile', ['file_token' => $message_media['file_token'], 'request_token' => $res['request_token']], ['heavy' => true, 'datacenter' => $old_dc]));
+                    $this->add_cdn_hashes($message_media['file_token'], yield $this->method_call_async_read('upload.reuploadCdnFile', ['file_token' => $message_media['file_token'], 'request_token' => $res['request_token']], ['heavy' => true, 'datacenter' => $old_dc]));
                 } catch (\danog\MadelineProto\RPCErrorException $e) {
                     switch ($e->rpc) {
                         case 'FILE_TOKEN_INVALID':
@@ -535,7 +693,7 @@ trait Files
                 $datacenter = 1;
             }
             while ($cdn === false && $res['type']['_'] === 'storage.fileUnknown' && $res['bytes'] === '') {
-                $res = $this->method_call('upload.getFile', ['location' => $message_media['InputFileLocation'], 'offset' => $offset, 'limit' => $part_size], ['heavy' => true, 'datacenter' => $datacenter]);
+                $res = yield $this->method_call_async_read('upload.getFile', ['location' => $message_media['InputFileLocation'], 'offset' => $offset, 'limit' => $part_size], ['heavy' => true, 'datacenter' => $datacenter]);
                 $datacenter++;
                 if (!isset($this->datacenter->sockets[$datacenter])) {
                     break;
@@ -567,11 +725,11 @@ trait Files
                 break;
             }
             if ($end !== -1) {
-                $cb($percent = $downloaded_size * 100 / $size);
+                $this->callFork($cb($percent = $downloaded_size * 100 / $size));
             }
         }
         if ($end === -1) {
-            $cb(100);
+            $this->callFork($cb(100));
         }
         if ($cdn) {
             $this->clear_cdn_hashes($message_media['file_token']);
@@ -596,7 +754,7 @@ trait Files
     {
         while (strlen($data)) {
             if (!isset($this->cdn_hashes[$file][$offset])) {
-                $this->add_cdn_hashes($file, $this->method_call('upload.getCdnFileHashes', ['file_token' => $file, 'offset' => $offset], ['datacenter' => $datacenter]));
+                $this->add_cdn_hashes($file, yield $this->method_call_async_read('upload.getCdnFileHashes', ['file_token' => $file, 'offset' => $offset], ['datacenter' => $datacenter]));
             }
             if (!isset($this->cdn_hashes[$file][$offset])) {
                 throw new \danog\MadelineProto\Exception('Could not fetch CDN hashes for offset '.$offset);

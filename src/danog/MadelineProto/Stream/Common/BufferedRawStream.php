@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -23,8 +23,8 @@ use Amp\Success;
 use danog\MadelineProto\Exception;
 use danog\MadelineProto\Stream\Async\RawStream;
 use danog\MadelineProto\Stream\ConnectionContext;
-use function Amp\call;
 use function Amp\Socket\connect;
+use Amp\ByteStream\ClosedException;
 
 /**
  * Buffered raw stream.
@@ -64,6 +64,9 @@ class BufferedRawStream implements \danog\MadelineProto\Stream\BufferedStreamInt
      */
     public function read(): Promise
     {
+        if (!$this->stream) {
+            throw new ClosedException("MadelineProto stream was disconnected");
+        }
         return $this->stream->read();
     }
 
@@ -76,6 +79,9 @@ class BufferedRawStream implements \danog\MadelineProto\Stream\BufferedStreamInt
      */
     public function write(string $data): Promise
     {
+        if (!$this->stream) {
+            throw new ClosedException("MadelineProto stream was disconnected");
+        }
         return $this->stream->write($data);
     }
 
@@ -105,6 +111,9 @@ class BufferedRawStream implements \danog\MadelineProto\Stream\BufferedStreamInt
      */
     public function getReadBuffer(&$length): Promise
     {
+        if (!$this->stream) {
+            throw new ClosedException("MadelineProto stream was disconnected");
+        }
         $size = fstat($this->memory_stream)['size'];
         $offset = ftell($this->memory_stream);
         $length = $size - $offset;
@@ -147,6 +156,9 @@ class BufferedRawStream implements \danog\MadelineProto\Stream\BufferedStreamInt
      */
     public function bufferRead(int $length): Promise
     {
+        if (!$this->stream) {
+            throw new ClosedException("MadelineProto stream was disconnected");
+        }
         $size = fstat($this->memory_stream)['size'];
         $offset = ftell($this->memory_stream);
         $buffer_length = $size - $offset;
@@ -154,7 +166,7 @@ class BufferedRawStream implements \danog\MadelineProto\Stream\BufferedStreamInt
             return new Success(fread($this->memory_stream, $length));
         }
 
-        return call([$this, 'bufferReadAsync'], $length);
+        return $this->call($this->bufferReadAsync($length));
     }
 
     /**
@@ -211,6 +223,16 @@ class BufferedRawStream implements \danog\MadelineProto\Stream\BufferedStreamInt
         }
 
         return $this->write($data);
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return \Amp\Socket\Socket
+     */
+    public function getSocket(): \Amp\Socket\Socket
+    {
+        return $this->stream->getSocket();
     }
 
     /**

@@ -14,7 +14,7 @@ $template = '<?php
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
  */
@@ -83,7 +83,7 @@ foreach (\danog\MadelineProto\Lang::$current_lang as $key => $value) {
             if (!$param_name && strpos($key, 'object_') === 0) {
                 $value = str_replace('Update ', '', $value).' update';
             }
-        } elseif (ctype_lower($value[0])) {
+            //} elseif (ctype_lower($value[0])) {
         } else {
             \danog\MadelineProto\Lang::$lang[$lang_code][$key] = readline($value.' => ');
             if (\danog\MadelineProto\Lang::$lang[$lang_code][$key] === '') {

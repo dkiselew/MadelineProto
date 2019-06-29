@@ -10,7 +10,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * @author    Daniil Gentili <daniil@daniil.it>
- * @copyright 2016-2018 Daniil Gentili <daniil@daniil.it>
+ * @copyright 2016-2019 Daniil Gentili <daniil@daniil.it>
  * @license   https://opensource.org/licenses/AGPL-3.0 AGPLv3
  *
  * @link      https://docs.madelineproto.xyz MadelineProto documentation
@@ -20,6 +20,7 @@ namespace danog\MadelineProto\Loop\Impl;
 
 use Amp\Deferred;
 use Amp\Promise;
+use danog\MadelineProto\Coroutine;
 use danog\MadelineProto\Loop\SignalLoopInterface;
 
 /**
@@ -44,8 +45,11 @@ abstract class SignalLoop extends Loop implements SignalLoopInterface
         }
     }
 
-    public function waitSignal(Promise $promise): Promise
+    public function waitSignal($promise): Promise
     {
+        if ($promise instanceof \Generator) {
+            $promise = new Coroutine($promise);
+        }
         $this->signalDeferred = new Deferred();
         $dpromise = $this->signalDeferred->promise();
 
