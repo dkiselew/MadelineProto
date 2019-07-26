@@ -39,7 +39,7 @@ trait DialogHandler
         return $res;
     }
 
-    public function get_full_dialogs_async($force = true)
+    public function get_full_dialogs_async($force = true, $returnFull = false)
     {
         if ($force || !isset($this->dialog_params['offset_date']) || is_null($this->dialog_params['offset_date']) || !isset($this->dialog_params['offset_id']) || is_null($this->dialog_params['offset_id']) || !isset($this->dialog_params['offset_peer']) || is_null($this->dialog_params['offset_peer']) || !isset($this->dialog_params['count']) || is_null($this->dialog_params['count'])) {
             $this->dialog_params = ['limit' => 100, 'offset_date' => 0, 'offset_id' => 0, 'offset_peer' => ['_' => 'inputPeerEmpty'], 'count' => 0, 'hash' => 0];
@@ -50,6 +50,8 @@ trait DialogHandler
         $res = ['dialogs' => [0], 'count' => 1];
         $datacenter = $this->datacenter->curdc;
         $dialogs = [];
+        $messages = [];
+        $chats = [];
 
         $this->logger->logger(\danog\MadelineProto\Lang::$current_lang['getting_dialogs']);
         while ($this->dialog_params['count'] < $res['count']) {
@@ -58,6 +60,8 @@ trait DialogHandler
             $last_date = 0;
             $last_id = 0;
             $res['messages'] = array_reverse($res['messages']);
+            $chats = array_merge($chats, $res['chats']);
+            $messages = array_merge($messages, $res['messages']);
             foreach (array_reverse($res['dialogs']) as $dialog) {
                 $id = $this->get_id($dialog['peer']);
                 if (!isset($dialogs[$id])) {
@@ -91,6 +95,14 @@ trait DialogHandler
             }
         }
 
-        return $dialogs;
+        if ($returnFull) {
+            return [
+                'dialogs' => $dialogs,
+                'messages' => $messages,
+                'chats' => $chats
+            ];    
+        } else {
+            return $dialogs;
+        }
     }
 }
